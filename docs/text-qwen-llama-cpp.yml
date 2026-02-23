@@ -9,7 +9,7 @@ services:
       - --port
       - "10802"
       - --ctx-size
-      - "32768"
+      - "24576"
       - --n-gpu-layers
       - "99"
       - --batch-size
