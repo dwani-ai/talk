@@ -62,7 +62,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build backend image
-        run: docker build -t talk-backend .
+        run: docker build -t talk-backend ./talk-server
 
       - name: Build frontend image
         run: docker build -t talk-frontend ./talk-ui

@@ -3,7 +3,7 @@
 # UI at http://localhost:80 — proxies /v1 to backend
 services:
   talk:
-    build: .
+    build: ./talk-server
     expose:
       - "8000"
     healthcheck:
