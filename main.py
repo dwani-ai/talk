@@ -19,6 +19,7 @@ import logging.config
 from logging.handlers import RotatingFileHandler
 
 from openai import OpenAI
+from openai import APIError as OpenAIAPIError
 import tempfile
 from pathlib import Path
 import httpx
@@ -148,6 +149,39 @@ async def transcribe_audio(
             logger.error(f"Transcription request failed: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
+# LLM (OpenAI-compatible, e.g. Gemma3)
+LLM_MODEL = os.getenv("DWANI_LLM_MODEL", "gemma3")
+
+
+def call_llm(user_text: str) -> str:
+    """Send text to OpenAI-compatible LLM and return the assistant reply."""
+    base_url = os.getenv("DWANI_API_BASE_URL_LLM", "").rstrip("/")
+    if not base_url:
+        raise ValueError("DWANI_API_BASE_URL_LLM is not set")
+    # OpenAI client expects base_url to include /v1
+    api_base = f"{base_url}/v1" if not base_url.endswith("/v1") else base_url
+    try:
+        client = OpenAI(base_url=api_base, api_key="dummy")
+        response = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": user_text}],
+            max_tokens=1024,
+        )
+    except OpenAIAPIError as e:
+        logger.error(f"LLM API error: {e}")
+        raise HTTPException(status_code=502, detail=f"LLM error: {str(e)}")
+    except Exception as e:
+        logger.error(f"LLM request failed: {e}")
+        raise HTTPException(status_code=502, detail=f"LLM error: {str(e)}")
+    content = response.choices[0].message.content if response.choices else None
+    if not content or not str(content).strip():
+        raise HTTPException(
+            status_code=502,
+            detail="LLM returned empty response",
+        )
+    return content.strip()
+
+
 from enum import Enum
 
 class SupportedLanguage(str, Enum):
@@ -189,10 +223,14 @@ async def speech_to_speech(
         if not text or not text.strip():
             raise HTTPException(status_code=400, detail="No speech detected in the audio")
 
+        llm_text = call_llm(text)
+        if not llm_text or not llm_text.strip():
+            raise HTTPException(status_code=502, detail="LLM returned empty text for TTS")
+
         base_url = f"{os.getenv('DWANI_API_BASE_URL_TTS')}/v1/audio/speech"
         tts_response = requests.post(
             base_url,
-            json={"text": text},
+            json={"text": llm_text},
             headers={"accept": "*/*", "Content-Type": "application/json"},
             timeout=30,
         )

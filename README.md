@@ -8,7 +8,7 @@ export DWANI_API_BASE_URL_TTS="http://0.0.0.0:10804"
 
 export DWANI_API_BASE_URL_ASR="http://0.0.0.0:10803"
 
-export DWANI_API_BASE_URL_LLM="asd"
+export DWANI_API_BASE_URL_LLM="https://0.0.0.0:10802"
 
 python3.10 -m venv venv
 source venv/bin/activate
