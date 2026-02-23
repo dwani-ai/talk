@@ -257,22 +257,55 @@ async def transcribe_audio(
 
 # LLM (OpenAI-compatible, e.g. Gemma3)
 LLM_MODEL = os.getenv("DWANI_LLM_MODEL", "gemma3")
+SESSION_CONTEXT_LIMIT = _env_int("DWANI_SESSION_CONTEXT_LIMIT", 10)  # max messages (5 turns) to send as context
+SESSION_MAX_HISTORY = _env_int("DWANI_SESSION_MAX_HISTORY", 20)  # max messages to store per session
+
+# In-memory session store: session_id -> list of {role, content}
+_session_store: Dict[str, List[Dict[str, str]]] = {}
+_session_order: List[str] = []
+_MAX_SESSIONS = 5000
 
 
-async def call_llm(user_text: str) -> str:
-    """Send text to OpenAI-compatible LLM and return the assistant reply."""
+def _get_session_context(session_id: str) -> List[Dict[str, str]]:
+    if not session_id:
+        return []
+    history = _session_store.get(session_id, [])
+    return history[-SESSION_CONTEXT_LIMIT:]
+
+
+def _append_to_session(session_id: str, user: str, assistant: str) -> None:
+    if not session_id:
+        return
+    if session_id not in _session_store:
+        _session_store[session_id] = []
+        _session_order.append(session_id)
+        while len(_session_store) > _MAX_SESSIONS and _session_order:
+            old = _session_order.pop(0)
+            _session_store.pop(old, None)
+    history = _session_store[session_id]
+    history.append({"role": "user", "content": user})
+    history.append({"role": "assistant", "content": assistant})
+    if len(history) > SESSION_MAX_HISTORY:
+        _session_store[session_id] = history[-SESSION_MAX_HISTORY:]
+
+
+async def call_llm(user_text: str, context: Optional[List[Dict[str, str]]] = None) -> str:
+    """Send text to OpenAI-compatible LLM with optional conversation context."""
     base_url = os.getenv("DWANI_API_BASE_URL_LLM", "").rstrip("/")
     if not base_url:
         raise ValueError("DWANI_API_BASE_URL_LLM is not set")
     api_base = f"{base_url}/v1" if not base_url.endswith("/v1") else base_url
+    messages = [
+        {"role": "system", "content": "You must respond in at most one line. Keep your reply to a single short sentence. Maintain conversation context when given previous messages."},
+    ]
+    if context:
+        messages.extend(context)
+    messages.append({"role": "user", "content": user_text})
     try:
         client = AsyncOpenAI(base_url=api_base, api_key="dummy", timeout=httpx.Timeout(LLM_TIMEOUT))
         response = await client.chat.completions.create(
             model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": "You must respond in at most one line. Keep your reply to a single short sentence."},
-                {"role": "user", "content": user_text},
-            ],
+            messages=messages,
             max_tokens=256,
         )
     except OpenAIAPIError as e:
@@ -326,14 +359,20 @@ async def speech_to_speech(
     })
 
     try:
+        session_id = (request.headers.get("X-Session-ID") or "").strip() or None
+        context = _get_session_context(session_id) if session_id else []
+
         asr_text = await transcribe_audio(file=file, language=language)
         text = asr_text.text
         if not text or not text.strip():
             raise HTTPException(status_code=400, detail="No speech detected in the audio")
 
-        llm_text = await call_llm(text)
+        llm_text = await call_llm(text, context=context)
         if not llm_text or not llm_text.strip():
             raise HTTPException(status_code=502, detail="LLM returned empty text for TTS")
+
+        if session_id:
+            _append_to_session(session_id, text, llm_text)
 
         base_url = f"{os.getenv('DWANI_API_BASE_URL_TTS')}/v1/audio/speech"
         async with httpx.AsyncClient(timeout=TTS_TIMEOUT) as client:

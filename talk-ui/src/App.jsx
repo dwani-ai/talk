@@ -1,5 +1,16 @@
 import { useRef, useState, useCallback } from 'react'
 
+const SESSION_KEY = 'talk_session_id'
+
+function getOrCreateSessionId() {
+  let id = sessionStorage.getItem(SESSION_KEY)
+  if (!id) {
+    id = crypto.randomUUID?.() || `s-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    sessionStorage.setItem(SESSION_KEY, id)
+  }
+  return id
+}
+
 const LANGUAGES = [
   { value: 'kannada', label: 'Kannada' },
   { value: 'hindi', label: 'Hindi' },
@@ -23,6 +34,7 @@ export default function App() {
   const [error, setError] = useState(null)
   const [conversations, setConversations] = useState([])
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sessionId, setSessionId] = useState(() => getOrCreateSessionId())
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
   const streamRef = useRef(null)
@@ -54,6 +66,7 @@ export default function App() {
         const res = await fetch(url, {
           method: 'POST',
           body: formData,
+          headers: { 'X-Session-ID': sessionId },
         })
         if (!res.ok) {
           const err = await res.json().catch(() => ({}))
@@ -91,8 +104,16 @@ export default function App() {
         setStatus('idle')
       }
     },
-    [language]
+    [language, sessionId]
   )
+
+  const startNewConversation = useCallback(() => {
+    const newId = crypto.randomUUID?.() || `s-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    sessionStorage.setItem(SESSION_KEY, newId)
+    setSessionId(newId)
+    setConversations([])
+    setError(null)
+  }, [])
 
   const onDataAvailable = useCallback((e) => {
     if (e.data.size > 0) chunksRef.current.push(e.data)
@@ -149,13 +170,22 @@ export default function App() {
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <h2>Conversations</h2>
-          <button
-            className="sidebar-close"
-            onClick={() => setSidebarOpen(false)}
-            aria-label="Close sidebar"
-          >
-            ×
-          </button>
+          <div className="sidebar-actions">
+            <button
+              className="btn-new"
+              onClick={startNewConversation}
+              aria-label="Start new conversation"
+            >
+              New
+            </button>
+            <button
+              className="sidebar-close"
+              onClick={() => setSidebarOpen(false)}
+              aria-label="Close sidebar"
+            >
+              ×
+            </button>
+          </div>
         </div>
         <div className="conversation-list">
           {conversations.length === 0 ? (
@@ -230,6 +260,9 @@ export default function App() {
 
         <footer>
           <small>Hold the button, speak, then release to get a reply.</small>
+          <button className="btn-new-inline" onClick={startNewConversation}>
+            New conversation
+          </button>
         </footer>
       </main>
     </div>
