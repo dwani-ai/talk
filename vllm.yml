@@ -4,12 +4,11 @@ services:
     ports:
       - "10802:9000"
     command: [
-      "vllm", "serve", "Qwen/Qwen3-0.6B",
-      "--reasoning-parser", "deepseek_r1",
+      "--model","Qwen/Qwen3-0.6B",
       "--served-model-name", "gemma3",
       "--host", "0.0.0.0",
       "--port", "9000",
-      "--gpu-memory-utilization", "0.97",
+      "--gpu-memory-utilization", "0.8",
       "--tensor-parallel-size", "1",
       "--max-model-len", "32768",
       "--disable-log-requests",
