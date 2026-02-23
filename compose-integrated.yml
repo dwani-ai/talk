@@ -1,0 +1,75 @@
+# Integrated stack: TTS (tts-indic-server) and LLM (vllm-server) in compose; ASR can be host.
+# Copy .env.example to .env. UI at http://localhost:80 — proxies /v1 to backend.
+services:
+  talk:
+    image: dwani/talk-server:latest
+    expose:
+      - "8000"
+    depends_on:
+      - tts-indic-server
+      - vllm-server
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    environment:
+      DWANI_API_BASE_URL_TTS: http://tts-indic-server:10804
+      DWANI_API_BASE_URL_ASR: ${DWANI_API_BASE_URL_ASR:-http://host.docker.internal:10803}
+      DWANI_API_BASE_URL_LLM: http://vllm-server:10802
+      DWANI_LLM_MODEL: ${DWANI_LLM_MODEL:-gemma3}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  talk-ui:
+    image: dwani/talk-ux:latest
+    ports:
+      - "80:80"
+    depends_on:
+      - talk
+    restart: unless-stopped
+  tts-indic-server:
+    image: dwani/tts-indic-server:latest
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    ports:
+      - "10804:10804"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+  vllm-server:
+    image: vllm/vllm-openai:latest
+    command: [
+      "--model", "RedHatAI/gemma-3-12b-it-FP8-dynamic",
+      "--served-model-name", "gemma3",
+      "--host", "0.0.0.0",
+      "--port", "10802",
+      "--gpu-memory-utilization", "0.9",
+      "--tensor-parallel-size", "1",
+      "--max-model-len", "8192",
+      "--disable-log-requests",
+      "--dtype", "bfloat16",
+      "--enable-chunked-prefill",
+      "--enable-prefix-caching",
+      "--max-num-batched-tokens", "8192",
+      "--chat-template-content-format", "openai"
+    ]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    ports:
+      - "10802:10802"

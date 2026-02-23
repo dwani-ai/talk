@@ -2,12 +2,12 @@ services:
   vllm:
     image: vllm/vllm-openai:latest
     ports:
-      - "10802:9000"
+      - "10802:10802"
     command: [
       "--model","Qwen/Qwen3-0.6B",
       "--served-model-name", "gemma3",
       "--host", "0.0.0.0",
-      "--port", "9000",
+      "--port", "10802",
       "--gpu-memory-utilization", "0.8",
       "--tensor-parallel-size", "1",
       "--max-model-len", "32768",
