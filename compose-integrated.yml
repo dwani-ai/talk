@@ -1,4 +1,4 @@
-# Integrated stack: TTS runs as tts-indic-server; ASR/LLM can be host or other containers.
+# Integrated stack: TTS (tts-indic-server) and LLM (vllm-server) in compose; ASR can be host.
 # Copy .env.example to .env. UI at http://localhost:80 — proxies /v1 to backend.
 services:
   talk:
@@ -7,6 +7,7 @@ services:
       - "8000"
     depends_on:
       - tts-indic-server
+      - vllm-server
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -51,7 +52,7 @@ services:
       "--model", "RedHatAI/gemma-3-12b-it-FP8-dynamic",
       "--served-model-name", "gemma3",
       "--host", "0.0.0.0",
-      "--port", "9000",
+      "--port", "10802",
       "--gpu-memory-utilization", "0.9",
       "--tensor-parallel-size", "1",
       "--max-model-len", "8192",
@@ -71,4 +72,4 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
     ports:
-      - "10802:9000"
+      - "10802:10802"
