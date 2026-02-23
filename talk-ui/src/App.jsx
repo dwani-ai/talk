@@ -33,7 +33,9 @@ export default function App() {
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState(null)
   const [conversations, setConversations] = useState([])
-  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth >= 768
+  )
   const [sessionId, setSessionId] = useState(() => getOrCreateSessionId())
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
