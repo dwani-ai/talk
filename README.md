@@ -1,70 +1,130 @@
-Talk - dwani.ai
+# Talk — dwani.ai
 
-Try at [https://talk.dwani.ai](https://talk.dwani.ai) 
+**Conversational AI for Indian languages.**  
+Try it: [talk.dwani.ai](https://talk.dwani.ai)
 
-
-Conversational AI for Indian languages
-
-Built with motivation to make AI accessible and available to everyone. 
-
-Runs with open-weight models using Nvidia L4 GPU on Google Cloud.
-
-
-Would love to get feedback and how you would use it for your own ideas ? 
+Built to make AI accessible to everyone, using open-weight models (e.g. Nvidia L4 on Google Cloud).  
+We’d love your feedback and to hear how you’d use it.
 
 ---
 
+## Prerequisites
+
+- **Local run:** Python 3.10+, and ASR / TTS / LLM services running (see [External services](#external-services)).
+- **Docker:** Docker and Docker Compose. For [Integrated stack](#production-integrated-stack): GPU with ≥24 GB VRAM.
+
+---
+
+## Quick start
+
+| Goal | Command |
+|------|--------|
+| **Local (Python)** | Set env URLs → `python main.py` (see [Run locally](#run-locally-python)). |
+| **Docker (host ASR/TTS/LLM)** | `cp .env.example .env` → `docker compose up -d` → open http://localhost |
+| **Docker dev (build from source)** | `docker compose -f compose-dev.yml up -d --build` |
+| **Production (integrated TTS + LLM)** | ASR on host → `docker compose -f compose-integrated.yml up -d` |
+
+---
 
 ## Run locally (Python)
 
-Use `0.0.0.0` when TTS/ASR/LLM run on the same machine:
+Use when ASR, TTS, and LLM run on the **same machine** (e.g. `0.0.0.0:10803`, `10804`, `10802`):
 
 ```bash
 export DWANI_API_BASE_URL_TTS="http://0.0.0.0:10804"
 export DWANI_API_BASE_URL_ASR="http://0.0.0.0:10803"
 export DWANI_API_BASE_URL_LLM="http://0.0.0.0:10802"
 python3.10 -m venv venv
-source venv/bin/activate
+source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 python main.py
 ```
 
+API: http://localhost:8000 (no UI; use curl or the UI from another setup).
+
+---
+
 ## Run with Docker (UI + backend)
 
-When the app runs **inside Docker** but TTS/ASR/LLM run on the **host**, use `host.docker.internal` so the container can reach the host:
+Use when **Talk** runs in Docker but **ASR / TTS / LLM** run on the **host**. The containers must use `host.docker.internal` to reach the host (do **not** use `0.0.0.0` in `.env`).
 
 ```bash
 cp .env.example .env
-# .env already uses host.docker.internal — edit if your ports differ
-export DWANI_API_BASE_URL_TTS="http://host.docker.internal:10804"
-export DWANI_API_BASE_URL_ASR="http://host.docker.internal:10803"
-export DWANI_API_BASE_URL_LLM="http://host.docker.internal:10802"
+# Edit .env if your ASR/TTS/LLM ports differ (defaults: 10803, 10804, 10802)
 docker compose up -d
 ```
 
-For Development
-  - ```bash
-    docker compose -f compose-dev.yml up -d --build
-    ```
+Open **http://localhost** for the UI.
 
-Open http://localhost (UI). If you used `0.0.0.0` in `.env`, change it to `http://host.docker.internal:PORT` for each service.
+### Development (build from source)
+
+```bash
+docker compose -f compose-dev.yml up -d --build
+```
+
+---
+
+## Production (integrated stack)
+
+Runs **Talk + UI + TTS (tts-indic-server) + LLM (vLLM)** in one stack. **ASR** must still run on the host (or set `DWANI_API_BASE_URL_ASR` in `.env`).
+
+**Requirements:** GPU with ≥24 GB VRAM.
+
+```bash
+# Ensure ASR is reachable (e.g. on host at 10803)
+docker compose -f compose-integrated.yml up -d
+```
+
+Open **http://localhost**. TTS and LLM are wired to the containers; only ASR uses the host by default.
+
+---
+
+## Build Docker images
+
+Build and tag images for use with `compose.yml` or `compose-integrated.yml`:
+
+**Backend (talk-server):**
+```bash
+cd talk-server
+docker build -t dwani/talk-server:latest -f Dockerfile .
+```
+
+**Frontend (talk-ux):**
+```bash
+cd talk-ux
+docker build -t dwani/talk-ux:latest -f Dockerfile .
+```
+
+---
+
+## External services
+
+| Service | Default port | Repo / notes |
+|--------|--------------|--------------|
+| **ASR** | 10803 | [asr-indic-server](https://github.com/dwani-ai/asr-indic-server) |
+| **TTS** | 10804 | [tts-indic-server](https://github.com/dwani-ai/tts-indic-server) |
+| **LLM** | 10802 | vLLM / OpenAI-compatible; see [docs/llm-setup.md](docs/llm-setup.md) |
+
+---
 
 ## Test (curl)
 
 ```bash
-curl -X POST 'http://localhost:8001/v1/speech_to_speech?language=kannada' \
+curl -X POST 'http://localhost:8000/v1/speech_to_speech?language=kannada' \
   -H 'Content-Type: multipart/form-data' -F 'file=@kannada_sample.wav' -o test.mp3
 ```
 
-<!-- 
-export TTS_NFE_STEPS=16  
-nohup python src/server/main.py --host 0.0.0.0 --port 10804 > server.log 2>&1 &
+If the UI runs on port 80 and proxies `/v1` to the backend, use `http://localhost/v1/speech_to_speech?...` instead.
 
+---
 
-nohup python src/server/asr_api.py --port 10803 --host 0.0.0.0 > server.log 2>&1 &
+## Environment variables
 
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DWANI_API_BASE_URL_ASR` | Yes | ASR service URL (e.g. `http://host.docker.internal:10803` in Docker). |
+| `DWANI_API_BASE_URL_TTS` | Yes | TTS service URL. |
+| `DWANI_API_BASE_URL_LLM` | Yes | LLM service URL (OpenAI-compatible). |
+| `DWANI_LLM_MODEL` | No | Model name (default: `gemma3`). |
 
- docker build -t dwani/talk-server -f Dockerfile .
-
- docker build -t dwani/talk-ux -f Dockerfile .
-
--->
+See [.env.example](.env.example) for optional timeouts, upload limits, and session context.

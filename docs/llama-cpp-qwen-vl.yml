@@ -9,7 +9,7 @@ services:
       - --host
       - 0.0.0.0
       - --port
-      - "9000"
+      - "10802"
       - --ctx-size
       - "24576"
       - --n-gpu-layers
@@ -32,4 +32,4 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "10802:10802"
