@@ -1,0 +1,33 @@
+services:
+  llama_cpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    command:
+      - --model
+      - /models/Qwen3-0.6B-Q8_0.gguf
+      - --host
+      - 0.0.0.0
+      - --port
+      - "10802"
+      - --ctx-size
+      - "24576"
+      - --n-gpu-layers
+      - "99"
+      - --batch-size
+      - "2048"
+      - --ubatch-size
+      - "256"
+      - --jinja
+      - --temp
+      - "0.7"
+    volumes:
+      - ./models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    ports:
+      - "10802:10802"

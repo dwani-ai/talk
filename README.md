@@ -1,6 +1,19 @@
 Talk - dwani.ai
 
-talk.dwani.ai / dwani.ai
+Try at [https://talk.dwani.ai](https://talk.dwani.ai) 
+
+
+Conversational AI for Indian languages
+
+Built with motivation to make AI accessible and available to everyone. 
+
+Runs with open-weight models using Nvidia L4 GPU on Google Cloud.
+
+
+Would love to get feedback and how you would use it for your own ideas ? 
+
+---
+
 
 ## Run locally (Python)
 
@@ -22,6 +35,9 @@ When the app runs **inside Docker** but TTS/ASR/LLM run on the **host**, use `ho
 ```bash
 cp .env.example .env
 # .env already uses host.docker.internal — edit if your ports differ
+export DWANI_API_BASE_URL_TTS="http://host.docker.internal:10804"
+export DWANI_API_BASE_URL_ASR="http://host.docker.internal:10803"
+export DWANI_API_BASE_URL_LLM="http://host.docker.internal:10802"
 docker compose up -d
 ```
 
@@ -34,3 +50,10 @@ curl -X POST 'http://localhost:8001/v1/speech_to_speech?language=kannada' \
   -H 'Content-Type: multipart/form-data' -F 'file=@kannada_sample.wav' -o test.mp3
 ```
 
+<!-- 
+export TTS_NFE_STEPS=16  
+nohup python src/server/main.py --host 0.0.0.0 --port 10804 > server.log 2>&1 &
+
+
+nohup python src/server/asr_api.py --port 10803 --host 0.0.0.0 > server.log 2>&1 &
+-->

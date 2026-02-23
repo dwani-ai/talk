@@ -6,6 +6,12 @@ services:
     build: .
     expose:
       - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     environment:
       DWANI_API_BASE_URL_TTS: ${DWANI_API_BASE_URL_TTS:-http://host.docker.internal:10804}
       DWANI_API_BASE_URL_ASR: ${DWANI_API_BASE_URL_ASR:-http://host.docker.internal:10803}
