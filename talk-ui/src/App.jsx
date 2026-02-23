@@ -8,10 +8,21 @@ const LANGUAGES = [
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
+function base64ToBlob(base64, mime) {
+  const byteChars = atob(base64)
+  const byteNumbers = new Array(byteChars.length)
+  for (let i = 0; i < byteChars.length; i++) {
+    byteNumbers[i] = byteChars.charCodeAt(i)
+  }
+  return new Blob([new Uint8Array(byteNumbers)], { type: mime })
+}
+
 export default function App() {
   const [language, setLanguage] = useState('kannada')
-  const [status, setStatus] = useState('idle') // idle | recording | processing | playing | error
+  const [status, setStatus] = useState('idle')
   const [error, setError] = useState(null)
+  const [conversations, setConversations] = useState([])
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
   const streamRef = useRef(null)
@@ -39,7 +50,7 @@ export default function App() {
       const ext = blob.type.includes('webm') ? 'webm' : 'wav'
       formData.append('file', blob, `recording.${ext}`)
       try {
-        const url = `${API_BASE}/v1/speech_to_speech?language=${encodeURIComponent(language)}`
+        const url = `${API_BASE}/v1/speech_to_speech?language=${encodeURIComponent(language)}&format=json`
         const res = await fetch(url, {
           method: 'POST',
           body: formData,
@@ -48,7 +59,20 @@ export default function App() {
           const err = await res.json().catch(() => ({}))
           throw new Error(err.detail || `Server error ${res.status}`)
         }
-        const audioBlob = await res.blob()
+        const data = await res.json()
+        const { transcription, llm_response, audio_base64 } = data
+
+        setConversations((prev) => [
+          ...prev,
+          {
+            id: Date.now(),
+            user: transcription || '(no transcription)',
+            assistant: llm_response || '(no response)',
+            timestamp: new Date().toLocaleTimeString(),
+          },
+        ])
+
+        const audioBlob = base64ToBlob(audio_base64, 'audio/mp3')
         const audioUrl = URL.createObjectURL(audioBlob)
         const audio = new Audio(audioUrl)
         setStatus('playing')
@@ -70,12 +94,9 @@ export default function App() {
     [language]
   )
 
-  const onDataAvailable = useCallback(
-    (e) => {
-      if (e.data.size > 0) chunksRef.current.push(e.data)
-    },
-    []
-  )
+  const onDataAvailable = useCallback((e) => {
+    if (e.data.size > 0) chunksRef.current.push(e.data)
+  }, [])
 
   const onStop = useCallback(() => {
     const blob = new Blob(chunksRef.current, { type: 'audio/wav' })
@@ -125,49 +146,92 @@ export default function App() {
 
   return (
     <div className="app">
-      <header>
-        <h1>Talk</h1>
-        <p className="tagline">Push to talk · ASR → LLM → TTS</p>
-      </header>
-
-      <div className="controls">
-        <label>
-          Language
-          <select
-            value={language}
-            onChange={(e) => setLanguage(e.target.value)}
-            disabled={status !== 'idle'}
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
+        <div className="sidebar-header">
+          <h2>Conversations</h2>
+          <button
+            className="sidebar-close"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close sidebar"
           >
-            {LANGUAGES.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <button
-          className={`mic ${status}`}
-          onPointerDown={handlePointerDown}
-          onPointerUp={handlePointerUp}
-          onPointerLeave={handlePointerLeave}
-          disabled={status === 'processing'}
-          aria-label={statusLabel}
-        >
-          <span className="icon">{status === 'recording' ? '⏹' : '🎤'}</span>
-          <span className="label">{statusLabel}</span>
-        </button>
-      </div>
-
-      {error && (
-        <div className="error" role="alert">
-          {error}
+            ×
+          </button>
         </div>
-      )}
+        <div className="conversation-list">
+          {conversations.length === 0 ? (
+            <p className="empty">No conversations yet. Hold the mic and speak.</p>
+          ) : (
+            conversations.map((c) => (
+              <div key={c.id} className="conversation-item">
+                <div className="conv-meta">{c.timestamp}</div>
+                <div className="conv-user">
+                  <span className="conv-label">You</span>
+                  <p>{c.user}</p>
+                </div>
+                <div className="conv-assistant">
+                  <span className="conv-label">Reply</span>
+                  <p>{c.assistant}</p>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </aside>
 
-      <footer>
-        <small>Hold the button, speak, then release to get a reply.</small>
-      </footer>
+      <main className="main">
+        <button
+          className="sidebar-toggle"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open conversations"
+          title="View conversations"
+        >
+          💬 {conversations.length > 0 && <span className="badge">{conversations.length}</span>}
+        </button>
+
+        <header>
+          <h1>Talk</h1>
+          <p className="tagline">Push to talk · ASR → LLM → TTS</p>
+        </header>
+
+        <div className="controls">
+          <label>
+            Language
+            <select
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              disabled={status !== 'idle'}
+            >
+              {LANGUAGES.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <button
+            className={`mic ${status}`}
+            onPointerDown={handlePointerDown}
+            onPointerUp={handlePointerUp}
+            onPointerLeave={handlePointerLeave}
+            disabled={status === 'processing'}
+            aria-label={statusLabel}
+          >
+            <span className="icon">{status === 'recording' ? '⏹' : '🎤'}</span>
+            <span className="label">{statusLabel}</span>
+          </button>
+        </div>
+
+        {error && (
+          <div className="error" role="alert">
+            {error}
+          </div>
+        )}
+
+        <footer>
+          <small>Hold the button, speak, then release to get a reply.</small>
+        </footer>
+      </main>
     </div>
   )
 }

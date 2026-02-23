@@ -1,5 +1,6 @@
 
 
+import base64
 import time
 import os 
 
@@ -256,6 +257,14 @@ async def speech_to_speech(
             extra={"content_length": len(audio_bytes), "content_type": tts_response.headers.get("Content-Type")},
         )
 
+        return_json = request.query_params.get("format") == "json"
+        if return_json:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(content={
+                "transcription": text,
+                "llm_response": llm_text,
+                "audio_base64": base64.b64encode(audio_bytes).decode("utf-8"),
+            })
         headers = {
             "Content-Disposition": "inline; filename=\"speech.mp3\"",
             "Cache-Control": "no-cache",
