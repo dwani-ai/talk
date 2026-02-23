@@ -164,8 +164,11 @@ def call_llm(user_text: str) -> str:
         client = OpenAI(base_url=api_base, api_key="dummy")
         response = client.chat.completions.create(
             model=LLM_MODEL,
-            messages=[{"role": "user", "content": user_text}],
-            max_tokens=1024,
+            messages=[
+                {"role": "system", "content": "You must respond in at most one line. Keep your reply to a single short sentence."},
+                {"role": "user", "content": user_text},
+            ],
+            max_tokens=256,
         )
     except OpenAIAPIError as e:
         logger.error(f"LLM API error: {e}")
@@ -179,7 +182,8 @@ def call_llm(user_text: str) -> str:
             status_code=502,
             detail="LLM returned empty response",
         )
-    return content.strip()
+    # Enforce single line for TTS (collapse newlines to space)
+    return " ".join(str(content).strip().split())
 
 
 from enum import Enum
