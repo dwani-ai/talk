@@ -1,0 +1,24 @@
+# For Docker: TTS/ASR/LLM on the *host* must use host.docker.internal (not 0.0.0.0).
+# Copy .env.example to .env and set URLs. Defaults below point to host ports.
+# UI at http://localhost:80 — proxies /v1 to backend
+services:
+  talk:
+    build: .
+    expose:
+      - "8000"
+    environment:
+      DWANI_API_BASE_URL_TTS: ${DWANI_API_BASE_URL_TTS:-http://host.docker.internal:10804}
+      DWANI_API_BASE_URL_ASR: ${DWANI_API_BASE_URL_ASR:-http://host.docker.internal:10803}
+      DWANI_API_BASE_URL_LLM: ${DWANI_API_BASE_URL_LLM:-http://host.docker.internal:10802}
+      DWANI_LLM_MODEL: ${DWANI_LLM_MODEL:-gemma3}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  talk-ui:
+    build: ./talk-ui
+    ports:
+      - "80:80"
+    depends_on:
+      - talk
+    restart: unless-stopped
