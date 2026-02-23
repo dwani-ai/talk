@@ -3,7 +3,7 @@
 # UI at http://localhost:80 — proxies /v1 to backend
 services:
   talk:
-    image: dwani/talk-server:latest
+    build: .
     expose:
       - "8000"
     healthcheck:
@@ -22,7 +22,7 @@ services:
     restart: unless-stopped
 
   talk-ui:
-    image: dwani/talk-ux:latest
+    build: ./talk-ui
     ports:
       - "80:80"
     depends_on:

@@ -27,7 +27,7 @@ jobs:
           pip install pytest
 
       - name: Run tests
-        run: pytest -q
+        run: PYTHONPATH=. pytest -q
 
   frontend:
     name: Frontend - Vite build

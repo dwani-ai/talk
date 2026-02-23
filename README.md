@@ -41,6 +41,11 @@ export DWANI_API_BASE_URL_LLM="http://host.docker.internal:10802"
 docker compose up -d
 ```
 
+For Development
+  - ```bash
+    docker compose -f compose-dev.yml up -d --build
+    ```
+
 Open http://localhost (UI). If you used `0.0.0.0` in `.env`, change it to `http://host.docker.internal:PORT` for each service.
 
 ## Test (curl)
@@ -56,4 +61,10 @@ nohup python src/server/main.py --host 0.0.0.0 --port 10804 > server.log 2>&1 &
 
 
 nohup python src/server/asr_api.py --port 10803 --host 0.0.0.0 > server.log 2>&1 &
+
+
+ docker build -t dwani/talk-server -f Dockerfile .
+
+ docker build -t dwani/talk-ux -f Dockerfile .
+
 -->
