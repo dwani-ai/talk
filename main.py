@@ -1,15 +1,14 @@
-
-
 import base64
 import time
-import os 
+import os
+import uuid
+import asyncio
 
 import argparse
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, Form, Query
 from pydantic import BaseModel, Field, ConfigDict
 
-from fastapi.responses import RedirectResponse, StreamingResponse, Response
-import requests
+from fastapi.responses import RedirectResponse, StreamingResponse, Response, JSONResponse
 from typing import List, Optional, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -19,13 +18,27 @@ import logging
 import logging.config
 from logging.handlers import RotatingFileHandler
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 from openai import APIError as OpenAIAPIError
 import tempfile
 from pathlib import Path
 import httpx
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 import uvicorn
+
+# Config (env with defaults)
+def _env_int(name: str, default: int) -> int:
+    v = os.getenv(name)
+    return int(v) if v else default
+
+ASR_TIMEOUT = _env_int("DWANI_ASR_TIMEOUT", 30)
+TTS_TIMEOUT = _env_int("DWANI_TTS_TIMEOUT", 30)
+LLM_TIMEOUT = _env_int("DWANI_LLM_TIMEOUT", 60)
+MAX_UPLOAD_BYTES = _env_int("DWANI_MAX_UPLOAD_BYTES", 25 * 1024 * 1024)  # 25MB
+MAX_RETRIES = _env_int("DWANI_MAX_RETRIES", 2)
 
 
 logging_config = {
@@ -60,6 +73,9 @@ logging.config.dictConfig(logging_config)
 logger = logging.getLogger("indic_all_server")
 
 
+# Rate limiter
+limiter = Limiter(key_func=get_remote_address)
+
 # FastAPI app setup with enhanced docs
 app = FastAPI(
     title="dwani.ai API",
@@ -72,6 +88,15 @@ app = FastAPI(
         {"name": "Translation", "description": "Text translation endpoints"},
     ],
 )
+app.state.limiter = limiter
+
+
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    rid = getattr(request.state, "request_id", str(uuid.uuid4()))
+    resp = _error_response(429, "Rate limit exceeded. Try again later.", rid, {"detail": str(getattr(exc, "detail", ""))})
+    resp.headers["Retry-After"] = "60"
+    return resp
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -86,6 +111,63 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+def _error_response(status_code: int, message: str, request_id: str = "", details: Optional[Dict] = None) -> JSONResponse:
+    rid = request_id or str(uuid.uuid4())
+    body = {
+        "error": {
+            "code": str(status_code),
+            "message": message,
+            "request_id": rid,
+            "details": details or {},
+        },
+        "detail": message,  # backward compat for clients expecting FastAPI default
+    }
+    return JSONResponse(status_code=status_code, content=body)
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    return _error_response(exc.status_code, detail, request_id)
+
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    request.state.request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request.state.request_id
+    return response
+
+
+@app.get("/health", tags=["Health"])
+async def health() -> Dict[str, str]:
+    """Liveness: service is running."""
+    return {"status": "ok"}
+
+
+@app.get("/ready", tags=["Health"])
+async def ready() -> Dict[str, Any]:
+    """Readiness: dependencies (ASR, TTS, LLM) are reachable."""
+    checks = {}
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for name, url in [
+            ("asr", os.getenv("DWANI_API_BASE_URL_ASR", "").rstrip("/") + "/" if os.getenv("DWANI_API_BASE_URL_ASR") else None),
+            ("tts", os.getenv("DWANI_API_BASE_URL_TTS", "").rstrip("/") + "/" if os.getenv("DWANI_API_BASE_URL_TTS") else None),
+            ("llm", os.getenv("DWANI_API_BASE_URL_LLM", "").rstrip("/") + "/v1/models" if os.getenv("DWANI_API_BASE_URL_LLM") else None),
+        ]:
+            if not url:
+                checks[name] = "skipped (no url)"
+                continue
+            try:
+                r = await client.get(url)
+                checks[name] = "ok" if r.status_code < 500 else f"error {r.status_code}"
+            except Exception as e:
+                checks[name] = f"unreachable: {type(e).__name__}"
+    return {"status": "ok" if all("ok" in str(v) or "skipped" in str(v) for v in checks.values()) else "degraded", "checks": checks}
+
+
 class TranscriptionResponse(BaseModel):
     text: str = Field(..., description="Transcribed text from the audio")
 
@@ -93,77 +175,99 @@ class TranscriptionResponse(BaseModel):
         json_schema_extra={"example": {"text": "Hello, how are you?"}}
     )
 
+async def _retry_async(coro_fn, max_retries: int = MAX_RETRIES):
+    """Execute async call with exponential backoff retries."""
+    last_err = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await coro_fn()
+        except HTTPException:
+            raise  # Don't retry HTTP errors
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            last_err = e
+            if attempt < max_retries:
+                delay = 2**attempt
+                logger.warning(f"Retry {attempt + 1}/{max_retries} after {delay}s: {e}")
+                await asyncio.sleep(delay)
+    raise last_err
+
+
 async def transcribe_audio(
     file: UploadFile = File(..., description="Audio file to transcribe"),
     language: str = Query(..., description="Language of the audio (kannada, hindi, tamil, english, german)")
 ):
     # Validate language
-    allowed_languages = ["kannada", "hindi", "tamil", "english","german", "telugu" , "marathi" ]
+    allowed_languages = ["kannada", "hindi", "tamil", "english", "german", "telugu", "marathi"]
     if language not in allowed_languages:
         raise HTTPException(status_code=400, detail=f"Language must be one of {allowed_languages}")
-    
-    start_time = time.time()
-   
-    if( language in ["english", "german"]):
-        
-        file_content = await file.read()
-        files = {"file": (file.filename, file_content, file.content_type),
-#                'model': (None, 'Systran/faster-whisper-large-v3')
-                'model': (None, 'Systran/faster-whisper-small')
-        }
-        
-        response = httpx.post('http://localhost:8000/v1/audio/transcriptions', files=files, timeout=30.0)
 
-        if response.status_code == 200:
-            transcription = response.json().get("text", "")
-            if transcription:
-                logger.debug(f"Transcription completed in {time.time() - start_time:.2f} seconds")
-                return TranscriptionResponse(text=transcription)
-            else:
-                logger.debug("Transcription empty, try again.")
-                raise HTTPException(status_code=500, detail="Transcription failed: empty result")
-        else:
-            logger.debug(f"Transcription error: {response.status_code} - {response.text}")
-            raise HTTPException(status_code=500, detail=f"Transcription failed: {response.text or response.status_code}")
-    else: 
+    start_time = time.time()
+    file_content = await file.read()
+    if len(file_content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large (max {MAX_UPLOAD_BYTES // (1024*1024)}MB)")
+
+    if language in ["english", "german"]:
+        base = os.getenv("DWANI_API_BASE_URL_TRANSCRIPTION", "http://localhost:8000").rstrip("/")
+        url = f"{base}/v1/audio/transcriptions"
+        files = {"file": (file.filename, file_content, file.content_type), "model": (None, "Systran/faster-whisper-small")}
+
+        async def _do():
+            async with httpx.AsyncClient(timeout=ASR_TIMEOUT) as client:
+                r = await client.post(url, files=files)
+                if r.status_code != 200:
+                    raise HTTPException(status_code=500, detail=f"Transcription failed: {r.text or r.status_code}")
+                data = r.json()
+                text = data.get("text", "")
+                if not text:
+                    raise HTTPException(status_code=500, detail="Transcription failed: empty result")
+                return TranscriptionResponse(text=text)
+
         try:
-            file_content = await file.read()
-            files = {"file": (file.filename, file_content, file.content_type)}
-            
-            external_url = f"{os.getenv('DWANI_API_BASE_URL_ASR')}/transcribe/?language={language}"
-            response = requests.post(
-                external_url,
-                files=files,
-                headers={"accept": "application/json"},
-                timeout=30
-            )
-            response.raise_for_status()
-            
-            transcription = response.json().get("text", "")
-            logger.debug(f"Transcription completed in {time.time() - start_time:.2f} seconds")
-            return TranscriptionResponse(text=transcription or "")
-        
-        except requests.Timeout:
+            result = await _retry_async(_do)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Transcription request failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+        logger.debug(f"Transcription completed in {time.time() - start_time:.2f}s")
+        return result
+    else:
+        external_url = f"{os.getenv('DWANI_API_BASE_URL_ASR')}/transcribe/?language={language}"
+        files = {"file": (file.filename, file_content, file.content_type)}
+
+        async def _do():
+            async with httpx.AsyncClient(timeout=ASR_TIMEOUT) as client:
+                r = await client.post(external_url, files=files, headers={"accept": "application/json"})
+                r.raise_for_status()
+                return TranscriptionResponse(text=r.json().get("text", "") or "")
+
+        try:
+            result = await _retry_async(_do)
+        except httpx.TimeoutException:
             logger.error("Transcription service timed out")
             raise HTTPException(status_code=504, detail="Transcription service timeout")
-        except requests.RequestException as e:
-            logger.error(f"Transcription request failed: {str(e)}")
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Transcription HTTP error: {e}")
+            raise HTTPException(status_code=500, detail=f"Transcription failed: {e.response.text}")
+        except Exception as e:
+            logger.error(f"Transcription request failed: {e}")
             raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+        logger.debug(f"Transcription completed in {time.time() - start_time:.2f}s")
+        return result
 
 # LLM (OpenAI-compatible, e.g. Gemma3)
 LLM_MODEL = os.getenv("DWANI_LLM_MODEL", "gemma3")
 
 
-def call_llm(user_text: str) -> str:
+async def call_llm(user_text: str) -> str:
     """Send text to OpenAI-compatible LLM and return the assistant reply."""
     base_url = os.getenv("DWANI_API_BASE_URL_LLM", "").rstrip("/")
     if not base_url:
         raise ValueError("DWANI_API_BASE_URL_LLM is not set")
-    # OpenAI client expects base_url to include /v1
     api_base = f"{base_url}/v1" if not base_url.endswith("/v1") else base_url
     try:
-        client = OpenAI(base_url=api_base, api_key="dummy")
-        response = client.chat.completions.create(
+        client = AsyncOpenAI(base_url=api_base, api_key="dummy", timeout=httpx.Timeout(LLM_TIMEOUT))
+        response = await client.chat.completions.create(
             model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": "You must respond in at most one line. Keep your reply to a single short sentence."},
@@ -179,11 +283,7 @@ def call_llm(user_text: str) -> str:
         raise HTTPException(status_code=502, detail=f"LLM error: {str(e)}")
     content = response.choices[0].message.content if response.choices else None
     if not content or not str(content).strip():
-        raise HTTPException(
-            status_code=502,
-            detail="LLM returned empty response",
-        )
-    # Enforce single line for TTS (collapse newlines to space)
+        raise HTTPException(status_code=502, detail="LLM returned empty response")
     return " ".join(str(content).strip().split())
 
 
@@ -202,9 +302,12 @@ class SupportedLanguage(str, Enum):
           responses={
               200: {"description": "Audio stream", "content": {"audio/mp3": {"example": "Binary audio data"}}},
               400: {"description": "Invalid input or language"},
+              413: {"description": "File too large"},
+              429: {"description": "Rate limit exceeded"},
               504: {"description": "External API timeout"},
               500: {"description": "External API error"}
           })
+@limiter.limit("20/minute")
 async def speech_to_speech(
     request: Request,
     file: UploadFile = File(..., description="Audio file to process"),
@@ -228,19 +331,19 @@ async def speech_to_speech(
         if not text or not text.strip():
             raise HTTPException(status_code=400, detail="No speech detected in the audio")
 
-        llm_text = call_llm(text)
+        llm_text = await call_llm(text)
         if not llm_text or not llm_text.strip():
             raise HTTPException(status_code=502, detail="LLM returned empty text for TTS")
 
         base_url = f"{os.getenv('DWANI_API_BASE_URL_TTS')}/v1/audio/speech"
-        tts_response = requests.post(
-            base_url,
-            json={"text": llm_text},
-            headers={"accept": "*/*", "Content-Type": "application/json"},
-            timeout=30,
-        )
-        tts_response.raise_for_status()
-        audio_bytes = tts_response.content
+        async with httpx.AsyncClient(timeout=TTS_TIMEOUT) as client:
+            tts_response = await client.post(
+                base_url,
+                json={"text": llm_text},
+                headers={"accept": "*/*", "Content-Type": "application/json"},
+            )
+            tts_response.raise_for_status()
+            audio_bytes = tts_response.content
 
         if not audio_bytes or len(audio_bytes) == 0:
             logger.error(
@@ -271,12 +374,12 @@ async def speech_to_speech(
             "Content-Type": "audio/mp3",
         }
         return Response(content=audio_bytes, media_type="audio/mp3", headers=headers)
-    except requests.Timeout:
+    except httpx.TimeoutException:
         logger.error("External speech-to-speech API timed out")
         raise HTTPException(status_code=504, detail="External API timeout")
-    except requests.RequestException as e:
-        logger.error(f"External speech-to-speech API error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"External API error: {str(e)}")
+    except httpx.HTTPError as e:
+        logger.error(f"External speech-to-speech API error: {e}")
+        raise HTTPException(status_code=502, detail=f"External API error: {str(e)}")
     
 
 

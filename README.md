@@ -35,6 +35,9 @@ When the app runs **inside Docker** but TTS/ASR/LLM run on the **host**, use `ho
 ```bash
 cp .env.example .env
 # .env already uses host.docker.internal — edit if your ports differ
+export DWANI_API_BASE_URL_TTS="http://host.docker.internal:10804"
+export DWANI_API_BASE_URL_ASR="http://host.docker.internal:10803"
+export DWANI_API_BASE_URL_LLM="http://host.docker.internal:10802"
 docker compose up -d
 ```
 
