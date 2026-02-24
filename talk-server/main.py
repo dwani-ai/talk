@@ -175,6 +175,20 @@ class TranscriptionResponse(BaseModel):
         json_schema_extra={"example": {"text": "Hello, how are you?"}}
     )
 
+
+class TTSRequest(BaseModel):
+    text: str = Field(..., description="Text to convert to speech", max_length=10_000)
+
+
+class ChatRequest(BaseModel):
+    text: str = Field(..., description="User message")
+    session_id: Optional[str] = Field(None, description="Optional session id for conversation context")
+
+
+class ChatResponse(BaseModel):
+    response: str = Field(..., description="LLM response text")
+    session_id: str = Field(..., description="Session id used for this conversation")
+
 async def _retry_async(coro_fn, max_retries: int = MAX_RETRIES):
     """Execute async call with exponential backoff retries."""
     last_err = None
@@ -194,7 +208,7 @@ async def _retry_async(coro_fn, max_retries: int = MAX_RETRIES):
 
 async def transcribe_audio(
     file: UploadFile = File(..., description="Audio file to transcribe"),
-    language: str = Query(..., description="Language of the audio (kannada, hindi, tamil, english, german)")
+    language: str = Query(..., description="Language of the audio (kannada, hindi, tamil, english, german)"),
 ):
     # Validate language
     allowed_languages = ["kannada", "hindi", "tamil", "english", "german", "telugu", "marathi"]
@@ -254,6 +268,63 @@ async def transcribe_audio(
             raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
         logger.debug(f"Transcription completed in {time.time() - start_time:.2f}s")
         return result
+
+
+@app.post(
+    "/v1/audio/transcriptions",
+    summary="Transcribe audio",
+    description="ASR endpoint: transcribe an uploaded audio file.",
+    tags=["Audio"],
+    response_model=TranscriptionResponse,
+)
+@limiter.limit("60/minute")
+async def transcribe_endpoint(
+    request: Request,
+    file: UploadFile = File(..., description="Audio file to transcribe"),
+    language: str = Query(..., description="Language of the audio (kannada, hindi, tamil, english, german)"),
+) -> TranscriptionResponse:
+    return await transcribe_audio(file=file, language=language)
+
+
+@app.post(
+    "/v1/audio/speech",
+    summary="Text-to-Speech",
+    description="TTS endpoint: convert input text to speech using the configured TTS backend.",
+    tags=["Audio"],
+    responses={
+        200: {"description": "Audio stream", "content": {"audio/mp3": {"example": "Binary audio data"}}},
+        400: {"description": "Invalid input"},
+        502: {"description": "TTS backend error"},
+    },
+)
+@limiter.limit("60/minute")
+async def tts_endpoint(
+    request: Request,
+    body: TTSRequest,
+) -> Response:
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+    base_url = f"{os.getenv('DWANI_API_BASE_URL_TTS')}/v1/audio/speech"
+    async with httpx.AsyncClient(timeout=TTS_TIMEOUT) as client:
+        tts_response = await client.post(
+            base_url,
+            json={"text": text},
+            headers={"accept": "*/*", "Content-Type": "application/json"},
+        )
+        tts_response.raise_for_status()
+        audio_bytes = tts_response.content
+
+    if not audio_bytes:
+        raise HTTPException(status_code=502, detail="TTS service returned empty audio")
+
+    headers = {
+        "Content-Disposition": 'inline; filename="speech.mp3"',
+        "Cache-Control": "no-cache",
+        "Content-Type": "audio/mp3",
+    }
+    return Response(content=audio_bytes, media_type="audio/mp3", headers=headers)
 
 # LLM (OpenAI-compatible, e.g. Gemma3)
 LLM_MODEL = os.getenv("DWANI_LLM_MODEL", "gemma3")
@@ -318,6 +389,35 @@ async def call_llm(user_text: str, context: Optional[List[Dict[str, str]]] = Non
     if not content or not str(content).strip():
         raise HTTPException(status_code=502, detail="LLM returned empty response")
     return " ".join(str(content).strip().split())
+
+
+@app.post(
+    "/v1/chat",
+    summary="Chat",
+    description="Chat endpoint: send a text message to the LLM with optional session context.",
+    tags=["Chat"],
+    response_model=ChatResponse,
+)
+@limiter.limit("60/minute")
+async def chat_endpoint(
+    request: Request,
+    body: ChatRequest,
+) -> ChatResponse:
+    session_id = (body.session_id or request.headers.get("X-Session-ID") or "").strip()
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    context = _get_session_context(session_id)
+
+    user_text = body.text.strip()
+    if not user_text:
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+    llm_text = await call_llm(user_text, context=context)
+    if not llm_text or not llm_text.strip():
+        raise HTTPException(status_code=502, detail="LLM returned empty text")
+
+    _append_to_session(session_id, user_text, llm_text)
+    return ChatResponse(response=llm_text, session_id=session_id)
 
 
 from enum import Enum

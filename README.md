@@ -118,6 +118,83 @@ If the UI runs on port 80 and proxies `/v1` to the backend, use `http://localhos
 
 ---
 
+## Public API endpoints
+
+These endpoints are available for external API consumers (in addition to the Talk UI).
+
+### 1. Transcribe (ASR)
+
+- **POST** `/v1/audio/transcriptions`
+- **Body**: `multipart/form-data` with `file` and `language` query param.
+
+```bash
+curl -X POST 'http://localhost:8000/v1/audio/transcriptions?language=kannada' \
+  -H 'Content-Type: multipart/form-data' \
+  -F 'file=@kannada_sample.wav' |
+  jq
+```
+
+Response:
+
+```json
+{ "text": "transcribed text" }
+```
+
+### 2. Text‑to‑Speech (TTS)
+
+- **POST** `/v1/audio/speech`
+- **Body**: JSON `{ "text": "Hello world" }`
+
+```bash
+curl -X POST 'http://localhost:8000/v1/audio/speech' \
+  -H 'Content-Type: application/json' \
+  -d '{ "text": "Hello from Talk" }' \
+  -o out.mp3
+```
+
+### 3. Chat (LLM)
+
+- **POST** `/v1/chat`
+- **Body**:
+
+```json
+{
+  "text": "Hello!",
+  "session_id": "optional-session-id"
+}
+```
+
+- Optional header: `X-Session-ID` (used if `session_id` not provided in body).
+
+```bash
+curl -X POST 'http://localhost:8000/v1/chat' \
+  -H 'Content-Type: application/json' \
+  -d '{ "text": "Hello!", "session_id": "demo-session" }'
+```
+
+Response:
+
+```json
+{ "response": "short answer here", "session_id": "demo-session" }
+```
+
+### 4. Speech‑to‑Speech
+
+- **POST** `/v1/speech_to_speech`
+- **Body**: `multipart/form-data` with `file`
+- **Query**:
+  - `language`: `kannada | hindi | tamil`
+  - Optional `format=json` → JSON with transcription + LLM text + base64 audio.
+
+```bash
+curl -X POST 'http://localhost:8000/v1/speech_to_speech?language=kannada&format=json' \
+  -H 'Content-Type: multipart/form-data' \
+  -F 'file=@kannada_sample.wav' |
+  jq
+```
+
+---
+
 ## Environment variables
 
 | Variable | Required | Description |
