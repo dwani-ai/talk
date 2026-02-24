@@ -152,31 +152,32 @@ curl -X POST 'http://localhost:8000/v1/audio/speech' \
   -o out.mp3
 ```
 
-### 3. Chat (LLM)
+### 3. LLM chat (vLLM / OpenAI API)
 
-- **POST** `/v1/chat`
-- **Body**:
+For chat, use the **LLM server via port 80** through the Talk nginx proxy.
 
-```json
-{
-  "text": "Hello!",
-  "session_id": "optional-session-id"
-}
-```
+- **Base URL:** `http://<host>/llm` (nginx proxies to the internal vLLM server)
+- **Endpoint:** `POST {LLM_BASE}/v1/chat/completions`
 
-- Optional header: `X-Session-ID` (used if `session_id` not provided in body).
+Example:
 
 ```bash
-curl -X POST 'http://localhost:8000/v1/chat' \
-  -H 'Content-Type: application/json' \
-  -d '{ "text": "Hello!", "session_id": "demo-session" }'
+LLM_BASE="http://localhost/llm"   # nginx on port 80 proxies to vLLM
+
+curl -X POST "$LLM_BASE/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dummy" \
+  -d '{
+    "model": "gemma3",
+    "messages": [
+      { "role": "system", "content": "You are a helpful assistant." },
+      { "role": "user", "content": "Hello!" }
+    ],
+    "max_tokens": 128
+  }'
 ```
 
-Response:
-
-```json
-{ "response": "short answer here", "session_id": "demo-session" }
-```
+Response shape follows the standard OpenAI chat completions format.
 
 ### 4. Speech‑to‑Speech
 
@@ -203,5 +204,6 @@ curl -X POST 'http://localhost:8000/v1/speech_to_speech?language=kannada&format=
 | `DWANI_API_BASE_URL_TTS` | Yes | TTS service URL. |
 | `DWANI_API_BASE_URL_LLM` | Yes | LLM service URL (OpenAI-compatible). |
 | `DWANI_LLM_MODEL` | No | Model name (default: `gemma3`). |
+| `DWANI_API_KEYS` | No | Comma-separated API keys. If set, public endpoints require `X-API-Key`. |
 
 See [.env.example](.env.example) for optional timeouts, upload limits, and session context.

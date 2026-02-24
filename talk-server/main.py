@@ -5,7 +5,7 @@ import uuid
 import asyncio
 
 import argparse
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, Form, Query
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, Form, Query, Depends
 from pydantic import BaseModel, Field, ConfigDict
 
 from fastapi.responses import RedirectResponse, StreamingResponse, Response, JSONResponse
@@ -39,6 +39,9 @@ TTS_TIMEOUT = _env_int("DWANI_TTS_TIMEOUT", 30)
 LLM_TIMEOUT = _env_int("DWANI_LLM_TIMEOUT", 60)
 MAX_UPLOAD_BYTES = _env_int("DWANI_MAX_UPLOAD_BYTES", 25 * 1024 * 1024)  # 25MB
 MAX_RETRIES = _env_int("DWANI_MAX_RETRIES", 2)
+
+API_KEYS_RAW = os.getenv("DWANI_API_KEYS", "").strip()
+API_KEYS = {k.strip() for k in API_KEYS_RAW.split(",") if k.strip()}
 
 
 logging_config = {
@@ -110,6 +113,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def api_auth_enabled() -> bool:
+    return bool(API_KEYS)
+
+
+async def require_api_key(request: Request) -> None:
+    """Simple API-key auth for public endpoints."""
+    if not api_auth_enabled():
+        return  # auth disabled when no keys configured
+
+    key = request.headers.get("X-API-Key") or request.headers.get("x-api-key")
+    if not key or key not in API_KEYS:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 def _error_response(status_code: int, message: str, request_id: str = "", details: Optional[Dict] = None) -> JSONResponse:
@@ -276,6 +293,7 @@ async def transcribe_audio(
     description="ASR endpoint: transcribe an uploaded audio file.",
     tags=["Audio"],
     response_model=TranscriptionResponse,
+    dependencies=[Depends(require_api_key)],
 )
 @limiter.limit("60/minute")
 async def transcribe_endpoint(
@@ -296,6 +314,7 @@ async def transcribe_endpoint(
         400: {"description": "Invalid input"},
         502: {"description": "TTS backend error"},
     },
+    dependencies=[Depends(require_api_key)],
 )
 @limiter.limit("60/minute")
 async def tts_endpoint(
@@ -394,9 +413,10 @@ async def call_llm(user_text: str, context: Optional[List[Dict[str, str]]] = Non
 @app.post(
     "/v1/chat",
     summary="Chat",
-    description="Chat endpoint: send a text message to the LLM with optional session context.",
+    description="Internal chat endpoint used by the Talk UI (not part of the public API).",
     tags=["Chat"],
     response_model=ChatResponse,
+    include_in_schema=False,  # hide from Swagger / public API docs
 )
 @limiter.limit("60/minute")
 async def chat_endpoint(
@@ -439,7 +459,8 @@ class SupportedLanguage(str, Enum):
               429: {"description": "Rate limit exceeded"},
               504: {"description": "External API timeout"},
               500: {"description": "External API error"}
-          })
+          },
+          dependencies=[Depends(require_api_key)])
 @limiter.limit("20/minute")
 async def speech_to_speech(
     request: Request,

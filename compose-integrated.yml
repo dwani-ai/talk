@@ -92,5 +92,3 @@ services:
               count: 1
               capabilities: [gpu]
     restart: unless-stopped
-    ports:
-      - "10802:10802"
