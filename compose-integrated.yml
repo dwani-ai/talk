@@ -20,6 +20,8 @@ services:
       DWANI_API_BASE_URL_ASR: http://asr-indic-server:10803
       DWANI_API_BASE_URL_LLM: http://vllm-server:10802
       DWANI_LLM_MODEL: ${DWANI_LLM_MODEL:-gemma3}
+      # Comma-separated API keys for public endpoints (X-API-Key). Leave empty to disable auth.
+      DWANI_API_KEYS: ${DWANI_API_KEYS:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

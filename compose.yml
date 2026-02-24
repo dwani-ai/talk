@@ -16,6 +16,7 @@ services:
       DWANI_API_BASE_URL_TTS: ${DWANI_API_BASE_URL_TTS:-http://host.docker.internal:10804}
       DWANI_API_BASE_URL_ASR: ${DWANI_API_BASE_URL_ASR:-http://host.docker.internal:10803}
       DWANI_API_BASE_URL_LLM: ${DWANI_API_BASE_URL_LLM:-http://host.docker.internal:10802}
+      DWANI_API_KEYS: ${DWANI_API_KEYS:-}
       DWANI_LLM_MODEL: ${DWANI_LLM_MODEL:-gemma3}
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -28,3 +29,7 @@ services:
     depends_on:
       - talk
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "vllm-server:host-gateway"
+
