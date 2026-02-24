@@ -26,6 +26,7 @@ import httpx
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import uvicorn
 
@@ -146,8 +147,23 @@ def _error_response(status_code: int, message: str, request_id: str = "", detail
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
-    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-    return _error_response(exc.status_code, detail, request_id)
+    # For 404 from inside app logic, return generic message
+    if exc.status_code == 404:
+        message = "Not found"
+    else:
+        message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    return _error_response(exc.status_code, message, request_id)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def starlette_http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Handle 404s from routing with a generic response."""
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    if exc.status_code == 404:
+        message = "Not found"
+    else:
+        message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    return _error_response(exc.status_code, message, request_id)
 
 
 @app.middleware("http")
@@ -159,12 +175,14 @@ async def add_request_id(request: Request, call_next):
 
 
 @app.get("/health", tags=["Health"])
+@limiter.limit("60/minute")
 async def health() -> Dict[str, str]:
     """Liveness: service is running."""
     return {"status": "ok"}
 
 
 @app.get("/ready", tags=["Health"])
+@limiter.limit("30/minute")
 async def ready() -> Dict[str, Any]:
     """Readiness: dependencies (ASR, TTS, LLM) are reachable."""
     checks = {}
