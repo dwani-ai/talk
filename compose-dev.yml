@@ -35,9 +35,9 @@ services:
     expose:
       - "8081"
     environment:
-      LITELLM_MODEL_NAME: ${DWANI_LLM_MODEL:-gemma3}
-      LITELLM_API_BASE: ${LITELLM_API_BASE:-http://host.docker.internal:10802/v1}
-      LITELLM_API_KEY: ${LITELLM_API_KEY:-dummy}
+      LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-openai/gemma3}
+      LITELLM_API_BASE: ${LITELLM_API_BASE:-https://qwen/v1}
+      LITELLM_API_KEY: ${LITELLM_API_KEY}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

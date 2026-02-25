@@ -99,10 +99,8 @@ services:
       dockerfile: Dockerfile
     expose:
       - "8081"
-    depends_on:
-      - vllm-server
     environment:
-      LITELLM_MODEL_NAME: ${DWANI_LLM_MODEL:-gemma3}
-      LITELLM_API_BASE: http://vllm-server:10802/v1
-      LITELLM_API_KEY: dummy
+      LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-openai/gemma3}
+      LITELLM_API_BASE: ${LITELLM_API_BASE:-https://qwen/v1}
+      LITELLM_API_KEY: ${LITELLM_API_KEY}
     restart: unless-stopped

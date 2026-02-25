@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -76,13 +77,20 @@ def healthz() -> Dict[str, str]:
 
 
 def _ensure_session(user_id: str, session_id: str) -> None:
+    """Create an ADK session if it does not already exist.
+
+    InMemorySessionService.create_session is async in this ADK version, so we
+    run it in a fresh event loop from this sync context.
+    """
     key = f"{user_id}:{session_id}"
     if key in _known_sessions:
         return
-    _session_service.create_session(
-        app_name=APP_NAME,
-        user_id=user_id,
-        session_id=session_id,
+    asyncio.run(
+        _session_service.create_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id,
+        )
     )
     _known_sessions.add(key)
 
