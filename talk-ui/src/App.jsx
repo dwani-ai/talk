@@ -30,6 +30,7 @@ function base64ToBlob(base64, mime) {
 
 export default function App() {
   const [language, setLanguage] = useState('kannada')
+  const [mode, setMode] = useState('llm') // 'llm' or 'agent'
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState(null)
   const [conversations, setConversations] = useState([])
@@ -64,7 +65,16 @@ export default function App() {
       const ext = blob.type.includes('webm') ? 'webm' : 'wav'
       formData.append('file', blob, `recording.${ext}`)
       try {
-        const url = `${API_BASE}/v1/speech_to_speech?language=${encodeURIComponent(language)}&format=json`
+        const isAgent = mode === 'agent'
+        const params = new URLSearchParams({
+          language,
+          format: 'json',
+          mode: isAgent ? 'agent' : 'llm',
+        })
+        if (isAgent) {
+          params.set('agent_name', 'travel_planner')
+        }
+        const url = `${API_BASE}/v1/speech_to_speech?${params.toString()}`
         const res = await fetch(url, {
           method: 'POST',
           body: formData,
@@ -106,7 +116,7 @@ export default function App() {
         setStatus('idle')
       }
     },
-    [language, sessionId]
+    [language, mode, sessionId]
   )
 
   const startNewConversation = useCallback(() => {
@@ -222,7 +232,9 @@ export default function App() {
 
         <header>
           <h1>Talk</h1>
-          <p className="tagline">Push to talk · ASR → LLM → TTS</p>
+          <p className="tagline">
+            Push to talk · ASR → {mode === 'agent' ? 'Agent' : 'LLM'} → TTS
+          </p>
         </header>
 
         <div className="controls">
@@ -238,6 +250,18 @@ export default function App() {
                   {opt.label}
                 </option>
               ))}
+            </select>
+          </label>
+
+          <label>
+            Mode
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value)}
+              disabled={status !== 'idle'}
+            >
+              <option value="llm">Chatbot (LLM)</option>
+              <option value="agent">Travel planner agent</option>
             </select>
           </label>
 

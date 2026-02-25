@@ -68,7 +68,7 @@ services:
   vllm-server:
     image: vllm/vllm-openai:latest
     command: [
-      "--model", "RedHatAI/gemma-3-12b-it-FP8-dynamic",
+      "--model", "Qwen/Qwen3-VL-8B-Instruct-FP8",
       "--served-model-name", "gemma3",
       "--host", "0.0.0.0",
       "--port", "10802",
@@ -80,7 +80,9 @@ services:
       "--enable-chunked-prefill",
       "--enable-prefix-caching",
       "--max-num-batched-tokens", "8192",
-      "--chat-template-content-format", "openai"
+      "--chat-template-content-format", "openai",
+      "--enable-auto-tool-choice",
+      "--tool-call-parser", "hermes"
     ]
     deploy:
       resources:
