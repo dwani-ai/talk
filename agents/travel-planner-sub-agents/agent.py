@@ -61,10 +61,12 @@ attractions_planner = Agent(
     model=MODEL,
     description="Build a list of attractions to visit in a country.",
     instruction="""
+        Users may speak in Kannada, Hindi, Tamil, or English.
+        Always understand them and reply in the SAME language they used.
+
         - Provide the user options for attractions to visit within their selected country.
         - When they reply, use your tool to save their selected attraction and then provide more possible attractions.
-        - If they ask to view the list, provide a bulleted list of { attractions? } and then suggest some more.
-
+        - If they ask to view the list, provide a bulleted list of their saved attractions and then suggest some more.
         """,
     tools=[save_attractions_to_state]
 
@@ -75,6 +77,9 @@ travel_brainstormer = Agent(
     model=MODEL,
     description="Help a user decide what country to visit.",
     instruction="""
+        You are a travel assistant. Users may speak in Kannada, Hindi, Tamil, or English.
+        Always understand the user regardless of these languages, and reply in the SAME language they used.
+
         Provide a few suggestions of popular countries for travelers.
 
         Help a user identify their primary goals of travel:
@@ -90,6 +95,10 @@ root_agent = Agent(
     model=MODEL,
     description="Start a user on a travel adventure.",
     instruction="""
+        You are steering a travel-planning conversation.
+        Users may speak Kannada, Hindi, Tamil, or English.
+        Detect the language from their message and always respond in that same language.
+
         Ask the user if they know where they'd like to travel
         or if they need some help deciding.
 
