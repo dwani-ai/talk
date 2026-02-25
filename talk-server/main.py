@@ -257,6 +257,7 @@ async def transcribe_audio(
 
 # LLM (OpenAI-compatible, e.g. Gemma3)
 LLM_MODEL = os.getenv("DWANI_LLM_MODEL", "gemma3")
+AGENT_BASE_URL = os.getenv("DWANI_AGENT_BASE_URL", "").rstrip("/")
 SESSION_CONTEXT_LIMIT = _env_int("DWANI_SESSION_CONTEXT_LIMIT", 10)  # max messages (5 turns) to send as context
 SESSION_MAX_HISTORY = _env_int("DWANI_SESSION_MAX_HISTORY", 20)  # max messages to store per session
 
@@ -320,6 +321,33 @@ async def call_llm(user_text: str, context: Optional[List[Dict[str, str]]] = Non
     return " ".join(str(content).strip().split())
 
 
+async def call_agent(agent_name: str, user_text: str, session_id: Optional[str]) -> str:
+    """Send text to the agents service for a named agent."""
+    if not AGENT_BASE_URL:
+        raise HTTPException(status_code=502, detail="Agent service base URL is not configured")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Agent mode requires a session_id")
+
+    url = f"{AGENT_BASE_URL}/v1/agents/{agent_name}/chat"
+    payload = {"session_id": session_id, "message": user_text}
+    try:
+        async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+            resp = await client.post(url, json=payload)
+    except Exception as e:
+        logger.error(f"Agent service request failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Agent service error: {str(e)}")
+
+    if resp.status_code != 200:
+        logger.error(f"Agent service returned {resp.status_code}: {resp.text}")
+        raise HTTPException(status_code=502, detail="Agent service returned an error")
+
+    data = resp.json()
+    reply = data.get("reply")
+    if not reply or not str(reply).strip():
+        raise HTTPException(status_code=502, detail="Agent returned empty response")
+    return " ".join(str(reply).strip().split())
+
+
 from enum import Enum
 
 class SupportedLanguage(str, Enum):
@@ -344,7 +372,9 @@ class SupportedLanguage(str, Enum):
 async def speech_to_speech(
     request: Request,
     file: UploadFile = File(..., description="Audio file to process"),
-    language: str = Query(..., description="Language of the audio (kannada, hindi, tamil)")
+    language: str = Query(..., description="Language of the audio (kannada, hindi, tamil)"),
+    mode: str = Query("llm", description="Processing mode: 'llm' or 'agent'"),
+    agent_name: Optional[str] = Query(None, description="Agent name when mode='agent'"),
 ) -> Response:
     # Validate language
     allowed_languages = [lang.value for lang in SupportedLanguage]
@@ -367,9 +397,14 @@ async def speech_to_speech(
         if not text or not text.strip():
             raise HTTPException(status_code=400, detail="No speech detected in the audio")
 
-        llm_text = await call_llm(text, context=context)
+        if mode == "agent":
+            selected_agent = agent_name or "travel_planner"
+            llm_text = await call_agent(selected_agent, text, session_id=session_id)
+        else:
+            llm_text = await call_llm(text, context=context)
+
         if not llm_text or not llm_text.strip():
-            raise HTTPException(status_code=502, detail="LLM returned empty text for TTS")
+            raise HTTPException(status_code=502, detail="Text for TTS is empty")
 
         if session_id:
             _append_to_session(session_id, text, llm_text)

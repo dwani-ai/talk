@@ -19,6 +19,7 @@ services:
       DWANI_API_BASE_URL_ASR: http://asr-indic-server:10803
       DWANI_API_BASE_URL_LLM: http://vllm-server:10802
       DWANI_LLM_MODEL: ${DWANI_LLM_MODEL:-gemma3}
+      DWANI_AGENT_BASE_URL: http://agents:8081
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -91,3 +92,17 @@ services:
     restart: unless-stopped
     ports:
       - "10802:10802"
+
+  agents:
+    build:
+      context: ./agents
+      dockerfile: Dockerfile
+    expose:
+      - "8081"
+    depends_on:
+      - vllm-server
+    environment:
+      LITELLM_MODEL_NAME: ${DWANI_LLM_MODEL:-gemma3}
+      LITELLM_API_BASE: http://vllm-server:10802/v1
+      LITELLM_API_KEY: dummy
+    restart: unless-stopped
