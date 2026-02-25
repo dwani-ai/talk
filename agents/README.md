@@ -2,6 +2,8 @@
 
 This directory contains examples and runnable agents built with [Google's Agent Development Kit (ADK)](https://github.com/GoogleCloudPlatform/devrel-demos), using LiteLLM for model inference (e.g. local or custom endpoints).
 
+In addition to local ADK usage, this folder also backs the **Talk agents HTTP service** used when Talk runs in *agent mode* (travel planner).
+
 ## Prerequisites
 
 - **Python 3.10**
@@ -51,6 +53,27 @@ Each example corresponds to a section in the [Google codelab: Build a multi-agen
 | **Travel planner (sub-agents)** | `adk run travel-planner-sub-agents` | [§6 – Sub-agents](https://codelabs.developers.google.com/codelabs/production-ready-ai-with-gc/3-developing-agents/build-a-multi-agent-system-with-adk#6) |
 
 Run any of the above from this directory after setup.
+
+## Use with the Talk stack
+
+When you run Talk via Docker, an **agents** container is built from [`agents/Dockerfile`](Dockerfile) and exposes:
+
+- `POST /v1/agents/{agent_name}/chat` – currently `agent_name = travel_planner`.
+
+The service:
+
+- Imports `root_agent` from `travel-planner-sub-agents/agent.py`.
+- Uses LiteLlm (`google.adk.models.lite_llm.LiteLlm`) configured via environment:
+
+  ```env
+  LITELLM_MODEL_NAME="openai/gemma3"
+  LITELLM_API_BASE="http://vllm-server:10802/v1"  # in integrated stack
+  LITELLM_API_KEY="sk-..."                        # or your real key
+  ```
+
+- Receives `{ "session_id": "...", "message": "..." }` from the Talk backend and returns `{ "reply": "..." }`.
+
+The Talk backend (`talk-server/main.py`) routes requests here when the UI selects **Travel planner agent** mode, while still using the same ASR/TTS pipeline.
 
 ## Web UI
 

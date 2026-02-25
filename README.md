@@ -79,6 +79,31 @@ Open **http://localhost**. TTS and LLM are wired to the containers; only ASR use
 
 ---
 
+## Agent mode (travel planner)
+
+The Talk UI can route user turns either:
+
+- **Directly to the LLM** (default), or  
+- **Through a multi-agent travel planner** built with Google ADK and LiteLlm.
+
+When you pick **“Travel planner agent”** in the UI:
+
+- The backend still does **ASR → text**.
+- Instead of calling the LLM directly, it calls an **agents service** (`/v1/agents/travel_planner/chat`).
+- The agents service runs the ADK `root_agent` from `agents/travel-planner-sub-agents/agent.py`, which in turn coordinates sub‑agents to:
+  - Help pick a country.
+  - Plan attractions and store them in state.
+- The final agent reply is sent to **TTS → audio** and played back just like normal LLM mode.
+
+How it runs:
+
+- **Docker (host ASR/TTS/LLM)**: `compose.yml` and `compose-dev.yml` include an `agents` service built from `agents/Dockerfile`.  
+- **Production integrated stack**: `compose-integrated.yml` adds an `agents` service wired to the internal `vllm-server` and exposes it to the backend via `DWANI_AGENT_BASE_URL`.
+
+For more details about the ADK setup and local agent experiments, see [`agents/README.md`](agents/README.md).
+
+---
+
 ## Build Docker images
 
 Build and tag images for use with `compose.yml` or `compose-integrated.yml`:
@@ -126,5 +151,6 @@ If the UI runs on port 80 and proxies `/v1` to the backend, use `http://localhos
 | `DWANI_API_BASE_URL_TTS` | Yes | TTS service URL. |
 | `DWANI_API_BASE_URL_LLM` | Yes | LLM service URL (OpenAI-compatible). |
 | `DWANI_LLM_MODEL` | No | Model name (default: `gemma3`). |
+| `DWANI_AGENT_BASE_URL` | No | Base URL for the agents HTTP service used in **agent mode** (e.g. `http://agents:8081` in Docker). |
 
 See [.env.example](.env.example) for optional timeouts, upload limits, and session context.
