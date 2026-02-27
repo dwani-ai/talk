@@ -86,11 +86,12 @@ The Talk UI can route user turns either:
 - **Directly to the LLM** (default), or  
 - **Through an ADK-powered agent** built with Google ADK and LiteLlm.
 
-Currently there are three agents:
+Currently there are four agents:
 
 - **Travel planner agent** – multi-agent travel-planning assistant.
 - **Viva/voce examiner** – single-agent viva/oral-exam examiner that scores each answer and gives feedback.
 - **Fix my city agent** – register city complaints (city, area, date, time, type, description) and check status of previous complaints; complaints are stored durably in SQLite.
+- **Orchestrator agent** – a smart router that looks at each user turn and delegates it to the travel planner, viva examiner, or fix-my-city agent as appropriate.
 
 When you pick **“Travel planner agent”** in the UI:
 
@@ -110,6 +111,12 @@ When you pick **“Viva/voce examiner”** in the UI:
   - Scores each answer (0–10) and provides brief feedback.
   - Summarizes performance (average score + strengths/weaknesses) at the end of the session.
 - The final agent reply is sent to **TTS → audio** and played back just like normal LLM mode.
+
+When you pick **“Orchestrator agent”** in the UI:
+
+- The backend calls the agents service (`/v1/agents/orchestrator/chat`).
+- The ADK `root_orchestrator_agent` in `agents/orchestrator/agent.py` inspects each message and forwards it to the appropriate specialist agent (`travel_planner`, `viva_examiner`, or `fix_my_city`).
+- The specialist agent’s reply is then sent to **TTS → audio** and played back just like normal LLM mode.
 
 How it runs:
 

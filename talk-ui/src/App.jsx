@@ -35,8 +35,8 @@ function base64ToBlob(base64, mime) {
 
 export default function App() {
   const [language, setLanguage] = useState('kannada')
-  const [mode, setMode] = useState('llm') // 'llm' or 'agent'
-  const [agentName, setAgentName] = useState('travel_planner')
+  const [mode, setMode] = useState('agent') // 'llm' or 'agent'
+  const [agentName, setAgentName] = useState('orchestrator')
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState(null)
   const [conversations, setConversations] = useState([])
@@ -337,7 +337,9 @@ export default function App() {
                     ? 'agent_viva'
                     : agentName === 'fix_my_city'
                       ? 'agent_fix_my_city'
-                      : 'agent_travel'
+                      : agentName === 'orchestrator'
+                        ? 'agent_orchestrator'
+                        : 'agent_travel'
               }
               onChange={(e) => {
                 const value = e.target.value
@@ -353,6 +355,9 @@ export default function App() {
                 } else if (value === 'agent_fix_my_city') {
                   setMode('agent')
                   setAgentName('fix_my_city')
+                } else if (value === 'agent_orchestrator') {
+                  setMode('agent')
+                  setAgentName('orchestrator')
                 }
               }}
               disabled={status !== 'idle'}
@@ -361,6 +366,7 @@ export default function App() {
               <option value="agent_travel">Travel planner agent</option>
               <option value="agent_viva">Viva/voce examiner</option>
               <option value="agent_fix_my_city">Fix my city agent</option>
+              <option value="agent_orchestrator">All-in-one assistant</option>
             </select>
           </label>
 

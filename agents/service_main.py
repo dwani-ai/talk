@@ -56,6 +56,22 @@ except Exception as exc:  # pragma: no cover - import-time failure logging
     raise RuntimeError(f"Failed to import fix-my-city agent: {exc}") from exc
 
 
+ORCHESTRATOR_AGENT_DIR = os.path.join(CURRENT_DIR, "orchestrator")
+ORCHESTRATOR_AGENT_PATH = os.path.join(ORCHESTRATOR_AGENT_DIR, "agent.py")
+
+try:
+    orchestrator_spec = importlib_util.spec_from_file_location(
+        "orchestrator_agent", ORCHESTRATOR_AGENT_PATH
+    )
+    if orchestrator_spec is None or orchestrator_spec.loader is None:
+        raise RuntimeError("Could not load spec for orchestrator agent")
+    orchestrator_module = importlib_util.module_from_spec(orchestrator_spec)
+    orchestrator_spec.loader.exec_module(orchestrator_module)  # type: ignore[attr-defined]
+    root_orchestrator_agent = getattr(orchestrator_module, "root_orchestrator_agent")
+except Exception as exc:  # pragma: no cover - import-time failure logging
+    raise RuntimeError(f"Failed to import orchestrator agent: {exc}") from exc
+
+
 logger = logging.getLogger("agents_service")
 logging.basicConfig(level=logging.INFO)
 
@@ -94,6 +110,12 @@ _agents: Dict[str, Runner] = {
     # Fix-my-city complaint registration and status agent.
     "fix_my_city": Runner(
         agent=root_fix_my_city_agent,
+        app_name=APP_NAME,
+        session_service=_session_service,
+    ),
+    # Orchestrator agent that routes to travel_planner, viva_examiner, or fix_my_city.
+    "orchestrator": Runner(
+        agent=root_orchestrator_agent,
         app_name=APP_NAME,
         session_service=_session_service,
     ),
