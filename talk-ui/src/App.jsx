@@ -15,6 +15,11 @@ const LANGUAGES = [
   { value: 'kannada', label: 'Kannada' },
   { value: 'hindi', label: 'Hindi' },
   { value: 'tamil', label: 'Tamil' },
+  { value: 'malayalam', label: 'Malayalam' },
+  { value: 'telugu', label: 'Telugu' },
+  { value: 'marathi', label: 'Marathi' },
+  { value: 'english', label: 'English' },
+  { value: 'german', label: 'German' },
 ]
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
