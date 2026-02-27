@@ -335,7 +335,9 @@ export default function App() {
                   ? 'llm'
                   : agentName === 'viva_examiner'
                     ? 'agent_viva'
-                    : 'agent_travel'
+                    : agentName === 'fix_my_city'
+                      ? 'agent_fix_my_city'
+                      : 'agent_travel'
               }
               onChange={(e) => {
                 const value = e.target.value
@@ -348,6 +350,9 @@ export default function App() {
                 } else if (value === 'agent_viva') {
                   setMode('agent')
                   setAgentName('viva_examiner')
+                } else if (value === 'agent_fix_my_city') {
+                  setMode('agent')
+                  setAgentName('fix_my_city')
                 }
               }}
               disabled={status !== 'idle'}
@@ -355,6 +360,7 @@ export default function App() {
               <option value="llm">Chatbot (LLM)</option>
               <option value="agent_travel">Travel planner agent</option>
               <option value="agent_viva">Viva/voce examiner</option>
+              <option value="agent_fix_my_city">Fix my city agent</option>
             </select>
           </label>
 

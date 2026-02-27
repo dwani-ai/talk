@@ -38,6 +38,11 @@ services:
       LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-openai/gemma3}
       LITELLM_API_BASE: ${LITELLM_API_BASE:-https://qwen/v1}
       LITELLM_API_KEY: ${LITELLM_API_KEY}
+    volumes:
+      - fix_my_city_data:/app/fix-my-city/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+
+volumes:
+  fix_my_city_data:

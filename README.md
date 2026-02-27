@@ -86,10 +86,11 @@ The Talk UI can route user turns either:
 - **Directly to the LLM** (default), or  
 - **Through an ADK-powered agent** built with Google ADK and LiteLlm.
 
-Currently there are two agents:
+Currently there are three agents:
 
 - **Travel planner agent** – multi-agent travel-planning assistant.
 - **Viva/voce examiner** – single-agent viva/oral-exam examiner that scores each answer and gives feedback.
+- **Fix my city agent** – register city complaints (city, area, date, time, type, description) and check status of previous complaints; complaints are stored durably in SQLite.
 
 When you pick **“Travel planner agent”** in the UI:
 
