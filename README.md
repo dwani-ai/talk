@@ -86,10 +86,12 @@ The Talk UI can route user turns either:
 - **Directly to the LLM** (default), or  
 - **Through an ADK-powered agent** built with Google ADK and LiteLlm.
 
-Currently there are two agents:
+Currently there are four agents:
 
 - **Travel planner agent** – multi-agent travel-planning assistant.
 - **Viva/voce examiner** – single-agent viva/oral-exam examiner that scores each answer and gives feedback.
+- **Fix my city agent** – register city complaints (city, area, date, time, type, description) and check status of previous complaints; complaints are stored durably in SQLite.
+- **Orchestrator agent** – a smart router that looks at each user turn and delegates it to the travel planner, viva examiner, or fix-my-city agent as appropriate.
 
 When you pick **“Travel planner agent”** in the UI:
 
@@ -110,12 +112,169 @@ When you pick **“Viva/voce examiner”** in the UI:
   - Summarizes performance (average score + strengths/weaknesses) at the end of the session.
 - The final agent reply is sent to **TTS → audio** and played back just like normal LLM mode.
 
+When you pick **“Orchestrator agent”** in the UI:
+
+- The backend calls the agents service (`/v1/agents/orchestrator/chat`).
+- The ADK `root_orchestrator_agent` in `agents/orchestrator/agent.py` inspects each message and forwards it to the appropriate specialist agent (`travel_planner`, `viva_examiner`, or `fix_my_city`).
+- The specialist agent’s reply is then sent to **TTS → audio** and played back just like normal LLM mode.
+
 How it runs:
 
 - **Docker (host ASR/TTS/LLM)**: `compose.yml` and `compose-dev.yml` include an `agents` service built from `agents/Dockerfile`.  
 - **Production integrated stack**: `compose-integrated.yml` adds an `agents` service wired to the internal `vllm-server` and exposes it to the backend via `DWANI_AGENT_BASE_URL`.
 
 For more details about the ADK setup and local agent experiments, see [`agents/README.md`](agents/README.md).
+
+---
+
+## Architecture overview
+
+At a high level Talk consists of:
+
+- **Frontend (Talk UI)** – React/Vite single-page app in `talk-ui/`:
+  - Runs in the browser, records audio, and shows a simple conversation sidebar.
+  - Calls the backend `/v1/speech_to_speech` (voice) or `/v1/chat` (text) APIs with a `X-Session-ID` header to preserve context.
+  - Lets the user choose between direct LLM mode and several agent modes (travel, viva, fix‑my‑city, all‑in‑one assistant).
+
+- **Backend API (Talk server)** – FastAPI app in `talk-server/`:
+  - Exposes `/v1/speech_to_speech`:
+    - Accepts audio → sends to **ASR** → gets text.
+    - Sends text either to **LLM** directly or to the **agents** HTTP service (when in agent mode).
+    - Sends the reply text to **TTS** and streams back MP3.
+  - Exposes `/v1/chat` for typed text only:
+    - Maintains short in‑memory session history per `X-Session-ID`.
+    - Sends text to LLM or to the agents service.
+  - Uses in‑memory session storage only (no user data persisted on disk).
+
+- **Agents service** – FastAPI + Google ADK app in `agents/`:
+  - Exposes `POST /v1/agents/{agent_name}/chat` to the backend:
+    - `travel_planner`, `viva_examiner`, `fix_my_city`, `orchestrator`.
+  - Each agent is a Google ADK `Agent` wired through a `Runner` with an `InMemorySessionService`.
+  - Agents themselves call out to the same LLM endpoint via LiteLlm, and in the case of **Fix my city**, also store complaints in SQLite.
+
+- **External model services**:
+  - **ASR** (speech → text) – `asr-indic-server` (default port `10803`).
+  - **TTS** (text → speech) – `tts-indic-server` (default port `10804`).
+  - **LLM** – vLLM / OpenAI‑compatible HTTP API (default port `10802`), backed by Gemma or Qwen in the provided compose files.
+
+End‑to‑end architecture (including agents):
+
+```mermaid
+flowchart LR
+  subgraph client["Client"]
+    talkUi["TalkUI"]
+  end
+
+  subgraph api["TalkServer_FastAPI"]
+    chatEp["ChatEndpoint_/v1/chat"]
+    s2sEp["Speech2Speech_/v1/speech_to_speech"]
+  end
+
+  subgraph modelServices["ModelAndSpeechServices"]
+    asrSvc["ASRServer"]
+    ttsSvc["TTSServer"]
+    llmSvc["LLMServer_vLLM_or_Qwen"]
+  end
+
+  subgraph agentsService["AgentsService_FastAPI_ADK"]
+    httpChat["AgentsHTTP_/v1/agents/{agent_name}/chat"]
+
+    subgraph adkCore["ADKRunnersAndSessions"]
+      sessionStore["InMemorySessionService"]
+      runnerTravel["Runner_travel_planner"]
+      runnerViva["Runner_viva_examiner"]
+      runnerCity["Runner_fix_my_city"]
+      runnerOrch["Runner_orchestrator"]
+    end
+
+    subgraph adkAgents["ADKAgents"]
+      agentTravel["TravelPlannerAgent"]
+      agentViva["VivaExaminerAgent"]
+      agentCity["FixMyCityAgent"]
+      agentOrch["OrchestratorAgent"]
+    end
+
+    subgraph cityStorage["FixMyCityStorage"]
+      cityDb["SQLiteComplaintsDB"]
+    end
+  end
+
+  %% UI → Backend
+  talkUi -->|text_or_audio\nX-Session-ID| chatEp
+  talkUi -->|audio\nX-Session-ID| s2sEp
+
+  %% Speech path
+  s2sEp -->|audio| asrSvc
+  asrSvc -->|text| s2sEp
+
+  %% Backend → LLM or agents
+  chatEp -->|mode=llm\ntext_plus_context| llmSvc
+  chatEp -->|mode=agent\ntext_plus_session_id| httpChat
+  s2sEp -->|text_plus_mode\n(agent_or_llm)| chatEp
+
+  %% HTTP → runners
+  httpChat -->|agent_name=travel_planner| runnerTravel
+  httpChat -->|agent_name=viva_examiner| runnerViva
+  httpChat -->|agent_name=fix_my_city| runnerCity
+  httpChat -->|agent_name=orchestrator| runnerOrch
+
+  %% Runners ↔ agents
+  runnerTravel --> agentTravel
+  runnerViva --> agentViva
+  runnerCity --> agentCity
+  runnerOrch --> agentOrch
+
+  %% Orchestrator delegations
+  agentOrch -->|tool_call_travel_planner| runnerTravel
+  agentOrch -->|tool_call_viva_examiner| runnerViva
+  agentOrch -->|tool_call_fix_my_city| runnerCity
+
+  %% Agents → LLM
+  agentTravel -->|LiteLlm_calls| llmSvc
+  agentViva -->|LiteLlm_calls| llmSvc
+  agentCity -->|LiteLlm_calls| llmSvc
+  agentOrch -->|LiteLlm_calls| llmSvc
+
+  %% Fix-my-city DB
+  agentCity -->|create_get_update_complaints| cityDb
+
+  %% Backend → TTS → UI
+  chatEp -->|reply_text| ttsSvc
+  s2sEp -->|reply_text| ttsSvc
+  ttsSvc -->|mp3_audio| talkUi
+```
+
+---
+
+## Tech stack
+
+- **Frontend (Talk UI)**
+  - React + Vite SPA in `talk-ui/`.
+  - Minimal CSS, no framework dependency for styling.
+  - Uses browser MediaRecorder for mic capture and fetch for API calls.
+
+- **Backend (Talk server)**
+  - Python 3.10+, FastAPI, Uvicorn.
+  - `httpx` for outbound HTTP to ASR/TTS/LLM/agents.
+  - OpenAI Python client for OpenAI‑compatible chat completions.
+  - `slowapi` for rate limiting, Pydantic v2 for request/response models.
+
+- **Agents service**
+  - Python 3.10+, FastAPI, Uvicorn in `agents/`.
+  - Google ADK (`google-adk`) for defining agents, tools, and runners.
+  - LiteLlm (`google.adk.models.lite_llm.LiteLlm`) as the model adapter, pointed at the same OpenAI‑compatible LLM endpoint.
+  - In‑memory session state via `InMemorySessionService`.
+  - SQLite (via `sqlite3`) for persistent complaint storage in the **Fix my city** workflow.
+
+- **Model & speech stack**
+  - ASR: [`asr-indic-server`](https://github.com/dwani-ai/asr-indic-server) (gRPC/HTTP service).
+  - TTS: [`tts-indic-server`](https://github.com/dwani-ai/tts-indic-server).
+  - LLM: vLLM (`vllm/vllm-openai` image) serving models such as Gemma‑3 or Qwen with an OpenAI‑compatible API.
+
+- **Infrastructure**
+  - Docker + Docker Compose for local dev and production‑style integrated stacks.
+  - Optional **GPU** (NVIDIA) for integrated vLLM + TTS + ASR stacks.
+  - Environment‑driven configuration (`.env`, Docker `environment:`) for all service URLs and model names.
 
 ---
 

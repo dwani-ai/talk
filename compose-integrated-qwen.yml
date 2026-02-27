@@ -105,4 +105,9 @@ services:
       LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-openai/gemma3}
       LITELLM_API_BASE: http://vllm-server:10802/v1
       LITELLM_API_KEY: ${LITELLM_API_KEY}
+    volumes:
+      - fix_my_city_data:/app/fix-my-city/data
     restart: unless-stopped
+
+volumes:
+  fix_my_city_data:
