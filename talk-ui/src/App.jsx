@@ -43,6 +43,7 @@ export default function App() {
     () => typeof window !== 'undefined' && window.innerWidth >= 768
   )
   const [sessionId, setSessionId] = useState(() => getOrCreateSessionId())
+  const [typedMessage, setTypedMessage] = useState('')
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
   const streamRef = useRef(null)
@@ -173,6 +174,57 @@ export default function App() {
     if (status === 'recording') stopRecording()
   }
 
+  const sendTypedMessage = useCallback(async () => {
+    const text = typedMessage.trim()
+    if (!text || status !== 'idle') return
+
+    setStatus('processing')
+    setError(null)
+
+    try {
+      const isAgent = mode === 'agent'
+      const payload = {
+        text,
+        mode: isAgent ? 'agent' : 'llm',
+      }
+      if (isAgent) {
+        payload.agent_name = 'travel_planner'
+      }
+
+      const res = await fetch(`${API_BASE}/v1/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-ID': sessionId,
+        },
+        body: JSON.stringify(payload),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || `Server error ${res.status}`)
+      }
+
+      const data = await res.json()
+      const assistant = data.reply || '(no response)'
+
+      setConversations((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          user: text,
+          assistant,
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ])
+      setTypedMessage('')
+      setStatus('idle')
+    } catch (e) {
+      setError(e.message || 'Request failed')
+      setStatus('idle')
+    }
+  }, [typedMessage, status, mode, sessionId])
+
   const statusLabel =
     status === 'recording'
       ? 'Recording…'
@@ -222,6 +274,22 @@ export default function App() {
               </div>
             ))
           )}
+        </div>
+        <div className="conversation-input">
+          <textarea
+            rows={2}
+            placeholder="Type your message…"
+            value={typedMessage}
+            onChange={(e) => setTypedMessage(e.target.value)}
+            disabled={status !== 'idle'}
+          />
+          <button
+            className="btn-send"
+            onClick={sendTypedMessage}
+            disabled={status !== 'idle' || !typedMessage.trim()}
+          >
+            Send
+          </button>
         </div>
       </aside>
 
