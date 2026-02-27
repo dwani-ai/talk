@@ -330,9 +330,12 @@ async def call_agent(agent_name: str, user_text: str, session_id: Optional[str])
 
     url = f"{AGENT_BASE_URL}/v1/agents/{agent_name}/chat"
     payload = {"session_id": session_id, "message": user_text}
-    try:
+    async def _do():
         async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
-            resp = await client.post(url, json=payload)
+            return await client.post(url, json=payload)
+
+    try:
+        resp = await _retry_async(_do)
     except Exception as e:
         logger.error(f"Agent service request failed: {e}")
         raise HTTPException(status_code=502, detail=f"Agent service error: {str(e)}")

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from importlib import util as importlib_util
@@ -55,6 +56,7 @@ fix_my_city_root_agent = _load_agent(
 
 APP_NAME = os.getenv("AGENTS_APP_NAME", "talk_orchestrator")
 _session_service = InMemorySessionService()
+_known_sessions: set[str] = set()
 
 
 travel_runner = Runner(
@@ -82,12 +84,31 @@ def _session_id_from_context(tool_context: ToolContext) -> str:
     )
 
 
-def _run_subagent_message(runner: Runner, session_id: str, message: str) -> str:
+async def _ensure_session_async(user_id: str, session_id: str) -> None:
+    """Create an ADK session if it does not already exist for this app."""
+    key = f"{user_id}:{session_id}"
+    if key in _known_sessions:
+        return
+    await _session_service.create_session(
+        app_name=APP_NAME,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    _known_sessions.add(key)
+
+
+async def _run_subagent_message_async(runner: Runner, session_id: str, message: str) -> str:
+    await _ensure_session_async(user_id=session_id, session_id=session_id)
+
     content = types.Content(role="user", parts=[types.Part(text=message)])
-    events = runner.run(user_id=session_id, session_id=session_id, new_message=content)
+    events = runner.run_async(
+        user_id=session_id,
+        session_id=session_id,
+        new_message=content,
+    )
 
     final_text_parts: list[str] = []
-    for event in events:
+    async for event in events:
         if getattr(event, "is_final_response", None) and event.is_final_response() and event.content:
             for p in event.content.parts:
                 text = getattr(p, "text", None)
@@ -100,26 +121,26 @@ def _run_subagent_message(runner: Runner, session_id: str, message: str) -> str:
     return " ".join(" ".join(final_text_parts).split())
 
 
-def call_travel_planner(tool_context: ToolContext, message: str) -> Dict[str, Any]:
+async def call_travel_planner(tool_context: ToolContext, message: str) -> Dict[str, Any]:
     """Delegate this turn to the travel planner agent."""
     session_id = _session_id_from_context(tool_context)
-    reply = _run_subagent_message(travel_runner, session_id, message)
+    reply = await _run_subagent_message_async(travel_runner, session_id, message)
     tool_context.state["active_agent"] = "travel_planner"
     return {"reply": reply, "target": "travel_planner"}
 
 
-def call_viva_examiner(tool_context: ToolContext, message: str) -> Dict[str, Any]:
+async def call_viva_examiner(tool_context: ToolContext, message: str) -> Dict[str, Any]:
     """Delegate this turn to the viva / oral exam agent."""
     session_id = _session_id_from_context(tool_context)
-    reply = _run_subagent_message(viva_runner, session_id, message)
+    reply = await _run_subagent_message_async(viva_runner, session_id, message)
     tool_context.state["active_agent"] = "viva_examiner"
     return {"reply": reply, "target": "viva_examiner"}
 
 
-def call_fix_my_city(tool_context: ToolContext, message: str) -> Dict[str, Any]:
+async def call_fix_my_city(tool_context: ToolContext, message: str) -> Dict[str, Any]:
     """Delegate this turn to the fix-my-city complaints agent."""
     session_id = _session_id_from_context(tool_context)
-    reply = _run_subagent_message(fix_my_city_runner, session_id, message)
+    reply = await _run_subagent_message_async(fix_my_city_runner, session_id, message)
     tool_context.state["active_agent"] = "fix_my_city"
     return {"reply": reply, "target": "fix_my_city"}
 
@@ -134,8 +155,16 @@ You are an orchestrator agent that routes each user message to one of three spec
 Users may speak or type in Kannada, Hindi, Tamil, Malayalam, Telugu, Marathi, English, or German.
 Detect the user's language and always respond in the SAME language.
 
+Session start:
+- At the beginning of a new session (when there is no 'active_agent' in state), briefly introduce yourself and the three skills:
+  1) Planning trips and attractions,
+  2) Practicing viva / oral exams,
+  3) Registering and tracking city complaints.
+- In the same short message, ask the user what they would like help with first.
+- Keep this introduction to 1–3 short sentences so it is easy to speak via TTS.
+
 Behavior:
-- Read the user's latest message and decide whether it is about:
+- After the initial introduction, read each user message and decide whether it is about:
   1) Travel planning,
   2) Viva / exam practice, or
   3) City complaints (registering a complaint or checking a complaint status).
