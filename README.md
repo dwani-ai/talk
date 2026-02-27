@@ -135,6 +135,13 @@ cd talk-ui
 docker build -t dwani/talk-ux:latest -f Dockerfile .
 ```
 
+**Agents (agents):**
+```bash
+cd agents
+docker build -t dwani/talk-agents:latest -f Dockerfile .
+```
+
+
 ---
 
 ## External services
