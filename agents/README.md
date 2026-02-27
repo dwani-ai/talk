@@ -79,11 +79,64 @@ The service:
 
 - Receives `{ "session_id": "...", "message": "..." }` from the Talk backend and returns `{ "reply": "..." }`.
 
-The Talk backend (`talk-server/main.py`) routes requests here when the UI selects **Travel planner agent** mode, while still using the same ASR/TTS pipeline.
+The Talk backend (`talk-server/main.py`) routes requests here when the UI selects any agent mode, while still using the same ASR/TTS pipeline.
+
+## Architecture
+
+At a high level the agents service looks like this:
+
+- **FastAPI HTTP layer** (`service_main.py`)
+  - Defines the `/v1/agents/{agent_name}/chat` endpoint and request/response models.
+  - Handles CORS and basic error mapping to HTTP 4xx/5xx.
+
+- **Session and runners**
+  - Uses a single `InMemorySessionService` shared across all agents.
+  - For each registered agent (`travel_planner`, `viva_examiner`, `fix_my_city`, `orchestrator`) creates a `Runner` with:
+    - The corresponding ADK `Agent` (`root_agent`, `root_viva_agent`, `root_fix_my_city_agent`, `root_orchestrator_agent`).
+    - A common `app_name` (from `AGENTS_APP_NAME`).
+    - The shared session service.
+  - On each HTTP call:
+    - Ensures an ADK session exists for `(user_id=session_id, session_id=session_id)`.
+    - Streams events from `Runner.run(...)` and concatenates the final text parts into the `reply` field.
+
+- **Agents and tools**
+  - Travel planner:
+    - Root agent orchestrates two sub‑agents (`travel_brainstormer`, `attractions_planner`) and uses tools like `save_attractions_to_state` to build state.
+  - Viva examiner:
+    - Single agent that uses a tool to record question/answer/score/feedback into its session state.
+  - Fix my city:
+    - Single agent with tools that read/write complaints from a SQLite database.
+  - Orchestrator:
+    - Single agent with tools that internally call the three domain agents via ADK runners and return their replies.
+
+In production, the agents service is typically fronted by Docker networking:
+
+```mermaid
+flowchart LR
+  backend[Talk server] -->|HTTP /v1/agents/.../chat| agentsSvc[Agents service (FastAPI + ADK)]
+  agentsSvc -->|LiteLlm| llm[LLM endpoint (vLLM/OpenAI)]
+  agentsSvc -->|SQLite| db[(Fix-my-city DB)]
+```
+
+## Tech stack
+
+- **Core**
+  - Python 3.10+
+  - FastAPI + Uvicorn for the HTTP service (`service_main.py`)
+  - Google ADK (`google-adk`) for agent definitions, tools, and runners
+  - LiteLlm adapter for calling the model endpoint
+
+- **Persistence**
+  - In‑memory session state via `InMemorySessionService` (per app name + user + session)
+  - SQLite database for fix‑my‑city complaints (see `fix-my-city/storage.py`), with Docker volumes used for durability in integrated stacks
+
+- **Model & infra integration**
+  - LITELLM_MODEL_NAME / LITELLM_API_BASE / LITELLM_API_KEY configure the inference endpoint (vLLM, Qwen, or other OpenAI‑compatible servers)
+  - Docker image built from `agents/Dockerfile`, wired into `compose.yml`, `compose-dev.yml`, and the integrated stacks
 
 ## Web UI
 
-To use the ADK web interface for running and inspecting agents:
+To use the ADK web interface for running and inspecting agents directly (outside of Talk):
 
 ```bash
 adk web
