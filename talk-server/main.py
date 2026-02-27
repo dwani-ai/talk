@@ -356,6 +356,41 @@ class SupportedLanguage(str, Enum):
     tamil = "tamil"
 
 
+class ChatRequest(BaseModel):
+    text: str = Field(..., description="User message text")
+    mode: str = Field("llm", description="Processing mode: 'llm' or 'agent'")
+    agent_name: Optional[str] = Field(
+        None, description="Agent name when mode='agent' (defaults to 'travel_planner')"
+    )
+
+
+@app.post(
+    "/v1/chat",
+    summary="Text chat",
+    description="Send a text message and receive an LLM or agent reply, with session-based context.",
+    tags=["Chat"],
+)
+@limiter.limit("60/minute")
+async def chat(request: Request, payload: ChatRequest) -> Dict[str, str]:
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text must not be empty")
+
+    session_id = (request.headers.get("X-Session-ID") or "").strip() or None
+    context = _get_session_context(session_id) if session_id else []
+
+    if payload.mode == "agent":
+        selected_agent = payload.agent_name or "travel_planner"
+        reply = await call_agent(selected_agent, text, session_id=session_id)
+    else:
+        reply = await call_llm(text, context=context)
+
+    if session_id:
+        _append_to_session(session_id, text, reply)
+
+    return {"user": text, "reply": reply}
+
+
 @app.post("/v1/speech_to_speech",
           summary="Speech-to-Speech Conversion",
           description="Convert input speech to processed speech in the specified language by calling an external speech-to-speech API.",

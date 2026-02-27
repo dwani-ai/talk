@@ -15,6 +15,11 @@ const LANGUAGES = [
   { value: 'kannada', label: 'Kannada' },
   { value: 'hindi', label: 'Hindi' },
   { value: 'tamil', label: 'Tamil' },
+  { value: 'malayalam', label: 'Malayalam' },
+  { value: 'telugu', label: 'Telugu' },
+  { value: 'marathi', label: 'Marathi' },
+  { value: 'english', label: 'English' },
+  { value: 'german', label: 'German' },
 ]
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
@@ -31,6 +36,7 @@ function base64ToBlob(base64, mime) {
 export default function App() {
   const [language, setLanguage] = useState('kannada')
   const [mode, setMode] = useState('llm') // 'llm' or 'agent'
+  const [agentName, setAgentName] = useState('travel_planner')
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState(null)
   const [conversations, setConversations] = useState([])
@@ -38,6 +44,7 @@ export default function App() {
     () => typeof window !== 'undefined' && window.innerWidth >= 768
   )
   const [sessionId, setSessionId] = useState(() => getOrCreateSessionId())
+  const [typedMessage, setTypedMessage] = useState('')
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
   const streamRef = useRef(null)
@@ -72,7 +79,7 @@ export default function App() {
           mode: isAgent ? 'agent' : 'llm',
         })
         if (isAgent) {
-          params.set('agent_name', 'travel_planner')
+          params.set('agent_name', agentName)
         }
         const url = `${API_BASE}/v1/speech_to_speech?${params.toString()}`
         const res = await fetch(url, {
@@ -116,7 +123,7 @@ export default function App() {
         setStatus('idle')
       }
     },
-    [language, mode, sessionId]
+    [language, mode, agentName, sessionId]
   )
 
   const startNewConversation = useCallback(() => {
@@ -168,6 +175,57 @@ export default function App() {
     if (status === 'recording') stopRecording()
   }
 
+  const sendTypedMessage = useCallback(async () => {
+    const text = typedMessage.trim()
+    if (!text || status !== 'idle') return
+
+    setStatus('processing')
+    setError(null)
+
+    try {
+      const isAgent = mode === 'agent'
+      const payload = {
+        text,
+        mode: isAgent ? 'agent' : 'llm',
+      }
+      if (isAgent) {
+        payload.agent_name = agentName
+      }
+
+      const res = await fetch(`${API_BASE}/v1/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-ID': sessionId,
+        },
+        body: JSON.stringify(payload),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || `Server error ${res.status}`)
+      }
+
+      const data = await res.json()
+      const assistant = data.reply || '(no response)'
+
+      setConversations((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          user: text,
+          assistant,
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ])
+      setTypedMessage('')
+      setStatus('idle')
+    } catch (e) {
+      setError(e.message || 'Request failed')
+      setStatus('idle')
+    }
+  }, [typedMessage, status, mode, agentName, sessionId])
+
   const statusLabel =
     status === 'recording'
       ? 'Recording…'
@@ -218,6 +276,22 @@ export default function App() {
             ))
           )}
         </div>
+        <div className="conversation-input">
+          <textarea
+            rows={2}
+            placeholder="Type your message…"
+            value={typedMessage}
+            onChange={(e) => setTypedMessage(e.target.value)}
+            disabled={status !== 'idle'}
+          />
+          <button
+            className="btn-send"
+            onClick={sendTypedMessage}
+            disabled={status !== 'idle' || !typedMessage.trim()}
+          >
+            Send
+          </button>
+        </div>
       </aside>
 
       <main className="main">
@@ -256,12 +330,31 @@ export default function App() {
           <label>
             Mode
             <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value)}
+              value={
+                mode === 'llm'
+                  ? 'llm'
+                  : agentName === 'viva_examiner'
+                    ? 'agent_viva'
+                    : 'agent_travel'
+              }
+              onChange={(e) => {
+                const value = e.target.value
+                if (value === 'llm') {
+                  setMode('llm')
+                  setAgentName('travel_planner')
+                } else if (value === 'agent_travel') {
+                  setMode('agent')
+                  setAgentName('travel_planner')
+                } else if (value === 'agent_viva') {
+                  setMode('agent')
+                  setAgentName('viva_examiner')
+                }
+              }}
               disabled={status !== 'idle'}
             >
               <option value="llm">Chatbot (LLM)</option>
-              <option value="agent">Travel planner agent</option>
+              <option value="agent_travel">Travel planner agent</option>
+              <option value="agent_viva">Viva/voce examiner</option>
             </select>
           </label>
 

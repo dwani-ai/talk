@@ -79,20 +79,35 @@ Open **http://localhost**. TTS and LLM are wired to the containers; only ASR use
 
 ---
 
-## Agent mode (travel planner)
+## Agent mode (travel planner & viva examiner)
 
 The Talk UI can route user turns either:
 
 - **Directly to the LLM** (default), or  
-- **Through a multi-agent travel planner** built with Google ADK and LiteLlm.
+- **Through an ADK-powered agent** built with Google ADK and LiteLlm.
+
+Currently there are two agents:
+
+- **Travel planner agent** – multi-agent travel-planning assistant.
+- **Viva/voce examiner** – single-agent viva/oral-exam examiner that scores each answer and gives feedback.
 
 When you pick **“Travel planner agent”** in the UI:
 
 - The backend still does **ASR → text**.
-- Instead of calling the LLM directly, it calls an **agents service** (`/v1/agents/travel_planner/chat`).
+- Instead of calling the LLM directly, it calls the **agents service** (`/v1/agents/travel_planner/chat`).
 - The agents service runs the ADK `root_agent` from `agents/travel-planner-sub-agents/agent.py`, which in turn coordinates sub‑agents to:
   - Help pick a country.
   - Plan attractions and store them in state.
+- The final agent reply is sent to **TTS → audio** and played back just like normal LLM mode.
+
+When you pick **“Viva/voce examiner”** in the UI:
+
+- The backend still does **ASR → text** (or accepts typed text).
+- Instead of calling the LLM directly, it calls the **agents service** (`/v1/agents/viva_examiner/chat`).
+- The ADK `root_viva_agent` in `agents/viva-examiner/agent.py` conducts an oral exam for the chosen subject:
+  - Asks short, clear viva questions.
+  - Scores each answer (0–10) and provides brief feedback.
+  - Summarizes performance (average score + strengths/weaknesses) at the end of the session.
 - The final agent reply is sent to **TTS → audio** and played back just like normal LLM mode.
 
 How it runs:
@@ -116,9 +131,16 @@ docker build -t dwani/talk-server:latest -f Dockerfile .
 
 **Frontend (talk-ux):**
 ```bash
-cd talk-ux
+cd talk-ui
 docker build -t dwani/talk-ux:latest -f Dockerfile .
 ```
+
+**Agents (agents):**
+```bash
+cd agents
+docker build -t dwani/talk-agents:latest -f Dockerfile .
+```
+
 
 ---
 

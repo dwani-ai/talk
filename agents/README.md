@@ -51,6 +51,7 @@ Each example corresponds to a section in the [Google codelab: Build a multi-agen
 | Example | Command | Codelab section |
 |--------|--------|------------------|
 | **Travel planner (sub-agents)** | `adk run travel-planner-sub-agents` | [§6 – Sub-agents](https://codelabs.developers.google.com/codelabs/production-ready-ai-with-gc/3-developing-agents/build-a-multi-agent-system-with-adk#6) |
+| **Viva/voce examiner** | `adk run viva-examiner` | Custom viva/oral-exam practice agent |
 
 Run any of the above from this directory after setup.
 
@@ -58,11 +59,12 @@ Run any of the above from this directory after setup.
 
 When you run Talk via Docker, an **agents** container is built from [`agents/Dockerfile`](Dockerfile) and exposes:
 
-- `POST /v1/agents/{agent_name}/chat` – currently `agent_name = travel_planner`.
+- `POST /v1/agents/{agent_name}/chat` – currently `agent_name = travel_planner` or `viva_examiner`.
 
 The service:
 
-- Imports `root_agent` from `travel-planner-sub-agents/agent.py`.
+- Imports the travel-planner `root_agent` from `travel-planner-sub-agents/agent.py`.
+- Imports the viva examiner `root_viva_agent` from `viva-examiner/agent.py`.
 - Uses LiteLlm (`google.adk.models.lite_llm.LiteLlm`) configured via environment:
 
   ```env

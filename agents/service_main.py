@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import sys
+from importlib import util as importlib_util
 from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException
@@ -12,8 +13,9 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-# Ensure we can import the travel-planner agent module
+# Ensure we can import the travel-planner and viva-examiner agent modules
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 TRAVEL_AGENT_DIR = os.path.join(CURRENT_DIR, "travel-planner-sub-agents")
 if TRAVEL_AGENT_DIR not in sys.path:
     sys.path.append(TRAVEL_AGENT_DIR)
@@ -22,6 +24,20 @@ try:
     from agent import root_agent  # type: ignore
 except Exception as exc:  # pragma: no cover - import-time failure logging
     raise RuntimeError(f"Failed to import travel planner agent: {exc}") from exc
+
+
+VIVA_AGENT_DIR = os.path.join(CURRENT_DIR, "viva-examiner")
+VIVA_AGENT_PATH = os.path.join(VIVA_AGENT_DIR, "agent.py")
+
+try:
+    viva_spec = importlib_util.spec_from_file_location("viva_examiner_agent", VIVA_AGENT_PATH)
+    if viva_spec is None or viva_spec.loader is None:
+        raise RuntimeError("Could not load spec for viva examiner agent")
+    viva_module = importlib_util.module_from_spec(viva_spec)
+    viva_spec.loader.exec_module(viva_module)  # type: ignore[attr-defined]
+    viva_root_agent = getattr(viva_module, "root_viva_agent")
+except Exception as exc:  # pragma: no cover - import-time failure logging
+    raise RuntimeError(f"Failed to import viva examiner agent: {exc}") from exc
 
 
 logger = logging.getLogger("agents_service")
@@ -50,6 +66,12 @@ _agents: Dict[str, Runner] = {
     # Root ADK multi-agent for travel planning.
     "travel_planner": Runner(
         agent=root_agent,
+        app_name=APP_NAME,
+        session_service=_session_service,
+    ),
+    # Viva/voce examiner agent.
+    "viva_examiner": Runner(
+        agent=viva_root_agent,
         app_name=APP_NAME,
         session_service=_session_service,
     ),
