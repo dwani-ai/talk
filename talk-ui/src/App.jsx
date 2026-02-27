@@ -36,6 +36,7 @@ function base64ToBlob(base64, mime) {
 export default function App() {
   const [language, setLanguage] = useState('kannada')
   const [mode, setMode] = useState('llm') // 'llm' or 'agent'
+  const [agentName, setAgentName] = useState('travel_planner')
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState(null)
   const [conversations, setConversations] = useState([])
@@ -78,7 +79,7 @@ export default function App() {
           mode: isAgent ? 'agent' : 'llm',
         })
         if (isAgent) {
-          params.set('agent_name', 'travel_planner')
+          params.set('agent_name', agentName)
         }
         const url = `${API_BASE}/v1/speech_to_speech?${params.toString()}`
         const res = await fetch(url, {
@@ -122,7 +123,7 @@ export default function App() {
         setStatus('idle')
       }
     },
-    [language, mode, sessionId]
+    [language, mode, agentName, sessionId]
   )
 
   const startNewConversation = useCallback(() => {
@@ -188,7 +189,7 @@ export default function App() {
         mode: isAgent ? 'agent' : 'llm',
       }
       if (isAgent) {
-        payload.agent_name = 'travel_planner'
+        payload.agent_name = agentName
       }
 
       const res = await fetch(`${API_BASE}/v1/chat`, {
@@ -223,7 +224,7 @@ export default function App() {
       setError(e.message || 'Request failed')
       setStatus('idle')
     }
-  }, [typedMessage, status, mode, sessionId])
+  }, [typedMessage, status, mode, agentName, sessionId])
 
   const statusLabel =
     status === 'recording'
@@ -329,12 +330,31 @@ export default function App() {
           <label>
             Mode
             <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value)}
+              value={
+                mode === 'llm'
+                  ? 'llm'
+                  : agentName === 'viva_examiner'
+                    ? 'agent_viva'
+                    : 'agent_travel'
+              }
+              onChange={(e) => {
+                const value = e.target.value
+                if (value === 'llm') {
+                  setMode('llm')
+                  setAgentName('travel_planner')
+                } else if (value === 'agent_travel') {
+                  setMode('agent')
+                  setAgentName('travel_planner')
+                } else if (value === 'agent_viva') {
+                  setMode('agent')
+                  setAgentName('viva_examiner')
+                }
+              }}
               disabled={status !== 'idle'}
             >
               <option value="llm">Chatbot (LLM)</option>
-              <option value="agent">Travel planner agent</option>
+              <option value="agent_travel">Travel planner agent</option>
+              <option value="agent_viva">Viva/voce examiner</option>
             </select>
           </label>
 
