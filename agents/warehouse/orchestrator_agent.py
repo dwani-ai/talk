@@ -1,8 +1,9 @@
 import asyncio
 import logging
 import os
+import sys
 from importlib import util as importlib_util
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from dotenv import load_dotenv
 
@@ -12,6 +13,12 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
+
+_WAREHOUSE_DIR = os.path.dirname(os.path.abspath(__file__))
+if _WAREHOUSE_DIR not in sys.path:
+  sys.path.insert(0, _WAREHOUSE_DIR)
+
+from state_store import get_state  # type: ignore[import-not-found]
 
 
 load_dotenv()
@@ -142,6 +149,26 @@ async def call_arm(tool_context: ToolContext, message: str) -> Dict[str, Any]:
     return {"reply": reply, "target": "arm"}
 
 
+def get_robots_state(tool_context: ToolContext) -> Dict[str, Any]:
+    """Return a snapshot of all robots with their positions, status, and current tasks."""
+    state = get_state()
+    robots: List[Dict[str, Any]] = state.get("robots", [])
+    summary = [
+        {
+            "id": r.get("id"),
+            "type": r.get("type"),
+            "status": r.get("status"),
+            "current_task": r.get("current_task"),
+            "position": r.get("position"),
+        }
+        for r in robots
+    ]
+    return {
+        "robots": summary,
+        "warehouse": state.get("warehouse", {}),
+    }
+
+
 WAREHOUSE_ORCHESTRATOR_INSTRUCTION = """
 You are a warehouse robotics orchestrator. You manage three specialist robots:
 
@@ -154,11 +181,16 @@ Users may give high-level commands like:
 - "Move box A-1 next to the loading dock."
 - "Stack the three parcels on rack 2."
 
+They may also ask for a status update, like:
+- "What are the robots doing right now?"
+- "Where are all the robots and what are their tasks?"
+
 Behavior:
 - Detect the user's intent and choose exactly one tool:
   - call_uav for mapping / scanning / aerial movements.
   - call_ugv for moving items on the floor.
   - call_arm for stacking / unstacking / placing on shelves.
+  - get_robots_state when the user asks about current robot state or tasks.
 - If you are unsure which robot should handle a request, ask ONE short clarification question.
 - After calling a tool, use its 'reply' as your main answer, summarizing what the robot did.
 
@@ -171,9 +203,9 @@ Language and style:
 root_warehouse_orchestrator_agent = Agent(
     name="warehouse_orchestrator",
     model=MODEL,
-    description="Routes warehouse tasks to UAV, UGV, or arm robot agents.",
+    description="Routes warehouse tasks to UAV, UGV, or arm robot agents and can report current robot state.",
     instruction=WAREHOUSE_ORCHESTRATOR_INSTRUCTION,
-    tools=[call_uav, call_ugv, call_arm],
+    tools=[call_uav, call_ugv, call_arm, get_robots_state],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.25,
     ),

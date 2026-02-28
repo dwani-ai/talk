@@ -1,9 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, Grid } from '@react-three/drei'
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
+
+const SESSION_KEY = 'talk_session_id'
+
+function getOrCreateSessionId() {
+  let id = sessionStorage.getItem(SESSION_KEY)
+  if (!id) {
+    id = crypto.randomUUID?.() || `s-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    sessionStorage.setItem(SESSION_KEY, id)
+  }
+  return id
+}
 
 function Robot({ robot }) {
   if (!robot) return null
@@ -41,39 +52,85 @@ function Item({ item }) {
 export default function WarehouseView() {
   const [state, setState] = useState({ warehouse: null, robots: [], items: [] })
   const [error, setError] = useState(null)
+  const [sessionId] = useState(() => getOrCreateSessionId())
+  const [command, setCommand] = useState('')
+  const [chatStatus, setChatStatus] = useState('idle')
+  const [chatLog, setChatLog] = useState([])
 
-  useEffect(() => {
-    let cancelled = false
-
-    async function fetchState() {
-      try {
-        const res = await fetch(`${API_BASE}/v1/warehouse/state`)
-        if (!res.ok) {
-          throw new Error(`Server error ${res.status}`)
-        }
-        const data = await res.json()
-        if (!cancelled) {
-          setState({
-            warehouse: data.warehouse || null,
-            robots: data.robots || [],
-            items: data.items || [],
-          })
-          setError(null)
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(e.message || 'Failed to load warehouse state')
-        }
+  const fetchState = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/v1/warehouse/state`)
+      if (!res.ok) {
+        throw new Error(`Server error ${res.status}`)
       }
-    }
-
-    fetchState()
-    const id = setInterval(fetchState, 2000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
+      const data = await res.json()
+      setState({
+        warehouse: data.warehouse || null,
+        robots: data.robots || [],
+        items: data.items || [],
+      })
+      setError(null)
+    } catch (e) {
+      setError(e.message || 'Failed to load warehouse state')
     }
   }, [])
+
+  useEffect(() => {
+    fetchState()
+    const id = setInterval(fetchState, 1000)
+    return () => {
+      clearInterval(id)
+    }
+  }, [fetchState])
+
+  const sendCommand = useCallback(
+    async (e) => {
+      e.preventDefault()
+      const text = command.trim()
+      if (!text || chatStatus === 'sending') return
+
+      setChatStatus('sending')
+      setError(null)
+
+      try {
+        const payload = {
+          text,
+          mode: 'agent',
+          agent_name: 'warehouse_orchestrator',
+        }
+        const res = await fetch(`${API_BASE}/v1/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Session-ID': sessionId,
+          },
+          body: JSON.stringify(payload),
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.detail || `Server error ${res.status}`)
+        }
+        const data = await res.json()
+        const assistant = data.reply || '(no response)'
+        setChatLog((prev) => [
+          ...prev,
+          {
+            id: Date.now(),
+            user: text,
+            assistant,
+          },
+        ])
+        setCommand('')
+        setChatStatus('idle')
+        // Trigger a state refresh so 3D view updates quickly.
+        fetchState()
+      } catch (e) {
+        setError(e.message || 'Command failed')
+        setChatStatus('idle')
+      }
+    },
+    [command, chatStatus, sessionId, fetchState]
+  )
 
   const { warehouse, robots, items } = state
   const uav = robots.find((r) => r.type === 'uav')
@@ -129,6 +186,35 @@ export default function WarehouseView() {
           </div>
 
           <aside className="warehouse-sidebar">
+            <form className="warehouse-chat" onSubmit={sendCommand}>
+              <h2>Command robots</h2>
+              <textarea
+                rows={2}
+                placeholder="Type a command for the warehouse robots…"
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                disabled={chatStatus === 'sending'}
+              />
+              <button
+                type="submit"
+                className="btn-send"
+                disabled={chatStatus === 'sending' || !command.trim()}
+              >
+                {chatStatus === 'sending' ? 'Sending…' : 'Send'}
+              </button>
+            </form>
+
+            {chatLog.length > 0 && (
+              <div className="warehouse-chat-log">
+                {chatLog.map((c) => (
+                  <div key={c.id} className="warehouse-chat-item">
+                    <div className="warehouse-chat-user">{c.user}</div>
+                    <div className="warehouse-chat-assistant">{c.assistant}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <h2>Robots</h2>
             <ul className="warehouse-list">
               {robots.map((r) => (
