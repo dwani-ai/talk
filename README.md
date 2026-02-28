@@ -79,21 +79,21 @@ Open **http://localhost**. TTS and LLM are wired to the containers; only ASR use
 
 ---
 
-## Agent mode (travel planner & viva examiner)
+## Agent mode
 
 The Talk UI can route user turns either:
 
 - **Directly to the LLM** (default), or  
 - **Through an ADK-powered agent** built with Google ADK and LiteLlm.
 
-Currently there are four agents:
+Currently there are six agents:
 
 - **Travel planner agent** – multi-agent travel-planning assistant.
 - **Viva/voce examiner** – single-agent viva/oral-exam examiner that scores each answer and gives feedback.
 - **Fix my city agent** – register city complaints (city, area, date, time, type, description) and check status of previous complaints; complaints are stored durably in SQLite.
 - **Orchestrator agent** – a smart router that looks at each user turn and delegates it to the travel planner, viva examiner, or fix-my-city agent as appropriate.
-- **Warehouse orchestrator** – controls UAV/UGV/Arm robots and returns verified `warehouse_state` for the 3D view.
-- **Chess orchestrator** – runs chess commands with deterministic rules and returns verified `chess_state` for the board.
+- **Warehouse orchestrator** – controls UAV/UGV/Arm robots and returns `warehouse_state` for the 3D view.
+- **Chess orchestrator** – runs chess commands and returns `chess_state` for the board.
 
 When you pick **“Travel planner agent”** in the UI:
 
@@ -145,8 +145,13 @@ Talk includes a dedicated **Chess** tab using the same end-to-end pattern as War
 - `e2 to e4` (also `e2e4`)
 - `ai move`
 - `show board state`
+- Natural language aliases such as `move pawn in front of king to two places`
 
-Core movement/capture/turn-order rules are enforced deterministically. Advanced rules (check/checkmate/stalemate/castling/en-passant) are deferred.
+Core movement/capture/turn-order rules are enforced. The current chess tab is rendered in 3D with:
+
+- smooth piece move interpolation
+- cinematic capture effects (piece-specific finisher styles)
+- move history and live state sync from `chess_state`
 
 ---
 

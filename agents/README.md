@@ -2,7 +2,7 @@
 
 This directory contains examples and runnable agents built with [Google's Agent Development Kit (ADK)](https://github.com/GoogleCloudPlatform/devrel-demos), using LiteLLM for model inference (e.g. local or custom endpoints).
 
-In addition to local ADK usage, this folder also backs the **Talk agents HTTP service** used when Talk runs in *agent mode* (travel planner).
+In addition to local ADK usage, this folder also backs the **Talk agents HTTP service** used when Talk runs in *agent mode*.
 
 ## Prerequisites
 
@@ -54,6 +54,8 @@ Each example corresponds to a section in the [Google codelab: Build a multi-agen
 | **Viva/voce examiner** | `adk run viva-examiner` | Custom viva/oral-exam practice agent |
 | **Fix my city** | — | City complaint registration and status; used via Talk UI |
 | **Orchestrator** | — | Routes each turn to travel planner, viva, or fix-my-city based on user intent; used via Talk UI |
+| **Warehouse orchestrator** | — | Routes warehouse robot commands and returns live `warehouse_state` |
+| **Chess orchestrator** | — | Routes chess commands and returns live `chess_state` |
 
 Run any of the above from this directory after setup. The **Fix my city** agent stores complaints in SQLite (see `fix-my-city/storage.py`); run `python3 test_storage.py` from `fix-my-city/` to run storage tests. The **Orchestrator** agent reuses the same LiteLlm configuration and delegates each request to the appropriate specialist agent.
 
@@ -62,6 +64,9 @@ Run any of the above from this directory after setup. The **Fix my city** agent 
 When you run Talk via Docker, an **agents** container is built from [`agents/Dockerfile`](Dockerfile) and exposes:
 
 - `POST /v1/agents/{agent_name}/chat` – `agent_name` may be `travel_planner`, `viva_examiner`, `fix_my_city`, or `orchestrator`.
+- `GET /v1/warehouse/state` – warehouse state snapshot for the Warehouse tab.
+- `GET /v1/chess/state` – chess state snapshot for the Chess tab.
+- `POST /v1/agents/{agent_name}/chat` – `agent_name` may be `travel_planner`, `viva_examiner`, `fix_my_city`, `orchestrator`, `warehouse_orchestrator`, or `chess_orchestrator`.
 
 The service:
 
@@ -69,6 +74,8 @@ The service:
 - Imports the viva examiner `root_viva_agent` from `viva-examiner/agent.py`.
 - Imports the fix-my-city agent `root_fix_my_city_agent` from `fix-my-city/agent.py` (complaints stored in SQLite; see `fix-my-city/storage.py`).
 - Imports the orchestrator agent `root_orchestrator_agent` from `orchestrator/agent.py`, which internally delegates each turn to travel_planner, viva_examiner, or fix_my_city via ADK runners.
+- Imports the warehouse orchestrator agent `root_warehouse_orchestrator_agent` from `warehouse/orchestrator_agent.py`.
+- Imports the chess orchestrator agent `root_chess_orchestrator_agent` from `chess/orchestrator_agent.py`.
 - Uses LiteLlm (`google.adk.models.lite_llm.LiteLlm`) configured via environment:
 
   ```env

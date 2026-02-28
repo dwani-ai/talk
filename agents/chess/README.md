@@ -35,7 +35,7 @@ This module adds agent-driven chess gameplay to Talk using the same pattern as W
 }
 ```
 
-## Supported commands (v1)
+## Supported commands
 
 - Start/reset:
   - `new game`
@@ -45,11 +45,20 @@ This module adds agent-driven chess gameplay to Talk using the same pattern as W
   - `e2 to e4`
   - `e2e4`
   - `move from g1 to f3`
+  - `move pawn in front of king to two places`
 - AI:
   - `ai move`
 - State:
   - `show board state`
   - `whose turn`
 
-Core movement rules are enforced for all pieces, including path blocking and capture legality. Check/checkmate/stalemate are intentionally out of scope for v1.
+Core movement rules are enforced for all pieces, including path blocking and capture legality.
+
+## UI/UX notes
+
+The Chess tab in `talk-ui` is a 3D board with:
+
+- smooth move interpolation for each executed move
+- cinematic capture animation with piece-specific finisher styles
+- live board/state updates from `chess_state`
 
