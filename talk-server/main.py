@@ -141,6 +141,34 @@ async def add_request_id(request: Request, call_next):
     return response
 
 
+@app.get(
+    "/v1/warehouse/state",
+    summary="Get warehouse robots and items state",
+    description="Proxy endpoint that returns the current simulated warehouse state (robots, items, bounds) for visualization.",
+    tags=["Warehouse"],
+)
+@limiter.limit("60/minute")
+async def get_warehouse_state(request: Request) -> Dict[str, Any]:
+    """Fetch warehouse state from the agents service."""
+    agent_base = os.getenv("DWANI_AGENT_BASE_URL", "").rstrip("/")
+    if not agent_base:
+        raise HTTPException(status_code=502, detail="Agent service base URL is not configured")
+    url = f"{agent_base}/v1/warehouse/state"
+    try:
+        async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+            resp = await client.get(url)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error(f"Warehouse state request failed: {exc}")
+        raise HTTPException(status_code=502, detail="Failed to reach warehouse state service") from exc
+    if resp.status_code != 200:
+        logger.error(f"Warehouse state service returned {resp.status_code}: {resp.text}")
+        raise HTTPException(status_code=502, detail="Warehouse state service returned an error")
+    data = resp.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="Warehouse state service returned invalid data")
+    return data
+
+
 @app.get("/health", tags=["Health"])
 async def health() -> Dict[str, str]:
     """Liveness: service is running."""

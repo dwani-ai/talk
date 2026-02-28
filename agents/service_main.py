@@ -13,6 +13,8 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
+from warehouse.state_store import get_state as get_warehouse_state_snapshot
+
 # Ensure we can import the travel-planner and viva-examiner agent modules
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -72,6 +74,24 @@ except Exception as exc:  # pragma: no cover - import-time failure logging
     raise RuntimeError(f"Failed to import orchestrator agent: {exc}") from exc
 
 
+WAREHOUSE_AGENT_DIR = os.path.join(CURRENT_DIR, "warehouse")
+WAREHOUSE_AGENT_PATH = os.path.join(WAREHOUSE_AGENT_DIR, "orchestrator_agent.py")
+
+try:
+    warehouse_spec = importlib_util.spec_from_file_location(
+        "warehouse_orchestrator_agent", WAREHOUSE_AGENT_PATH
+    )
+    if warehouse_spec is None or warehouse_spec.loader is None:
+        raise RuntimeError("Could not load spec for warehouse orchestrator agent")
+    warehouse_module = importlib_util.module_from_spec(warehouse_spec)
+    warehouse_spec.loader.exec_module(warehouse_module)  # type: ignore[attr-defined]
+    root_warehouse_orchestrator_agent = getattr(
+        warehouse_module, "root_warehouse_orchestrator_agent"
+    )
+except Exception as exc:  # pragma: no cover - import-time failure logging
+    raise RuntimeError(f"Failed to import warehouse orchestrator agent: {exc}") from exc
+
+
 logger = logging.getLogger("agents_service")
 logging.basicConfig(level=logging.INFO)
 
@@ -119,6 +139,12 @@ _agents: Dict[str, Runner] = {
         app_name=APP_NAME,
         session_service=_session_service,
     ),
+    # Warehouse orchestrator for UAV, UGV, and arm robots.
+    "warehouse_orchestrator": Runner(
+        agent=root_warehouse_orchestrator_agent,
+        app_name=APP_NAME,
+        session_service=_session_service,
+    ),
 }
 
 
@@ -140,6 +166,15 @@ app.add_middleware(
 @app.get("/healthz")
 def healthz() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/v1/warehouse/state")
+def get_warehouse_state() -> Dict[str, Any]:
+    """Return the current warehouse robots/items state for visualization."""
+    snapshot = get_warehouse_state_snapshot()
+    if not isinstance(snapshot, dict):
+        raise HTTPException(status_code=500, detail="Invalid warehouse state")
+    return snapshot
 
 
 def _ensure_session(user_id: str, session_id: str) -> None:
