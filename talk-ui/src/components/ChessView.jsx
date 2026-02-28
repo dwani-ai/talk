@@ -379,7 +379,11 @@ export default function ChessView() {
 
   useEffect(() => {
     fetchState()
-    const id = setInterval(fetchState, 1200)
+    const poll = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+      fetchState()
+    }
+    const id = setInterval(poll, 1200)
     return () => clearInterval(id)
   }, [fetchState])
 

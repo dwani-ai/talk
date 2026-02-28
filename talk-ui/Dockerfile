@@ -2,7 +2,7 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci 2>/dev/null || npm install
+RUN npm ci
 COPY . .
 # Same-origin: UI and API on same host; nginx will proxy /v1 to backend
 ENV VITE_API_URL=

@@ -7,6 +7,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
@@ -29,6 +30,51 @@ app = FastAPI(
     ],
 )
 app.state.limiter = limiter
+
+
+def _setup_tracing() -> None:
+    if os.getenv("DWANI_ENABLE_TRACING", "0") != "1":
+        return
+    try:
+        from opentelemetry import trace
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        endpoint = os.getenv("DWANI_OTEL_EXPORTER_OTLP_ENDPOINT", "").strip() or None
+        tracer_provider = TracerProvider(resource=Resource.create({"service.name": "talk-server"}))
+        span_exporter = OTLPSpanExporter(endpoint=endpoint) if endpoint else OTLPSpanExporter()
+        tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
+        trace.set_tracer_provider(tracer_provider)
+        FastAPIInstrumentor.instrument_app(app)
+    except Exception as exc:
+        logger.warning("Tracing setup skipped due to error: %s", exc)
+
+
+def _setup_metrics() -> None:
+    if os.getenv("DWANI_ENABLE_METRICS", "1") != "1":
+        return
+    Instrumentator(excluded_handlers=["/health"]).instrument(app).expose(app, endpoint="/metrics")
+
+
+_setup_tracing()
+_setup_metrics()
+
+
+@app.on_event("startup")
+async def validate_required_env() -> None:
+    if os.getenv("DWANI_ENFORCE_ENV", "0") != "1":
+        return
+    required = [
+        "DWANI_API_BASE_URL_LLM",
+        "DWANI_API_BASE_URL_TTS",
+        "DWANI_API_BASE_URL_ASR",
+    ]
+    missing = [name for name in required if not os.getenv(name)]
+    if missing:
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
 
 def _error_response(status_code: int, message: str, request_id: str = "", details: Optional[Dict] = None) -> JSONResponse:
@@ -122,6 +168,9 @@ async def add_request_id(request: Request, call_next):
     request.state.request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     response = await call_next(request)
     response.headers["X-Request-ID"] = request.state.request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
 
 

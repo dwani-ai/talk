@@ -41,10 +41,10 @@ def test_speech_to_speech_returns_json_when_mocked(client: TestClient, monkeypat
     """With transcribe, LLM and TTS mocked, returns 200 and JSON with transcription, llm_response, audio_base64."""
     from models import TranscriptionResponse
 
-    async def fake_transcribe(file, language):
+    async def fake_transcribe(file, language, request_id=None):
         return TranscriptionResponse(text="hello")
 
-    async def fake_call_llm(user_text, context=None):
+    async def fake_call_llm(user_text, context=None, request_id=None):
         return "hi there"
 
     class FakeTtsResponse:

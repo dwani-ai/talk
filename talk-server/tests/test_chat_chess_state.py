@@ -8,7 +8,7 @@ client = TestClient(main.app)
 
 
 def test_chat_returns_chess_state_for_chess_agent(monkeypatch):
-    async def _fake_call_agent(agent_name, user_text, session_id):
+    async def _fake_call_agent(agent_name, user_text, session_id, request_id=None):
         assert agent_name == "chess_orchestrator"
         return {
             "reply": "wP moved e2->e4. black to move.",

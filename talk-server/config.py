@@ -2,6 +2,7 @@
 import os
 import logging.config
 
+
 def _env_int(name: str, default: int) -> int:
     v = os.getenv(name)
     return int(v) if v else default
@@ -19,32 +20,33 @@ _MAX_SESSIONS = 5000
 
 LLM_MODEL = os.getenv("DWANI_LLM_MODEL", "gemma3")
 AGENT_BASE_URL = os.getenv("DWANI_AGENT_BASE_URL", "").rstrip("/")
+LOG_FORMAT = os.getenv("DWANI_LOG_FORMAT", "json").strip().lower()
 
+
+_FORMATTERS = {
+    "plain": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"},
+}
+if LOG_FORMAT == "json":
+    _FORMATTERS["json"] = {
+        "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
+        "fmt": "%(asctime)s %(name)s %(levelname)s %(message)s %(request_id)s %(session_id)s",
+    }
 
 LOGGING_CONFIG = {
     "version": 1,
     "disable_existing_loggers": False,
-    "formatters": {
-        "simple": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"},
-    },
+    "formatters": _FORMATTERS,
     "handlers": {
         "stdout": {
             "class": "logging.StreamHandler",
-            "formatter": "simple",
+            "formatter": "json" if LOG_FORMAT == "json" else "plain",
             "stream": "ext://sys.stdout",
-        },
-        "file": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "formatter": "simple",
-            "filename": "dwani_api.log",
-            "maxBytes": 10 * 1024 * 1024,
-            "backupCount": 5,
         },
     },
     "loggers": {
         "root": {
             "level": "INFO",
-            "handlers": ["stdout", "file"],
+            "handlers": ["stdout"],
         },
     },
 }

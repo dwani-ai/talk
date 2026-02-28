@@ -103,7 +103,11 @@ export default function WarehouseView() {
 
   useEffect(() => {
     fetchState()
-    const id = setInterval(fetchState, 1000)
+    const poll = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+      fetchState()
+    }
+    const id = setInterval(poll, 1000)
     return () => {
       clearInterval(id)
     }

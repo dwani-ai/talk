@@ -8,7 +8,7 @@ client = TestClient(main.app)
 
 
 def test_chat_returns_warehouse_state_for_warehouse_agent(monkeypatch):
-    async def _fake_call_agent(agent_name, user_text, session_id):
+    async def _fake_call_agent(agent_name, user_text, session_id, request_id=None):
         assert agent_name == "warehouse_orchestrator"
         return {
             "reply": "ugv-1 moved to [5.0, 0.0, 0.0].",

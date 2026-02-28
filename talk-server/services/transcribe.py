@@ -1,5 +1,6 @@
 import os
 import time
+from typing import Optional
 
 import httpx
 from fastapi import HTTPException, UploadFile
@@ -9,7 +10,7 @@ from models import ALLOWED_LANGUAGES, TranscriptionResponse
 from services.retry import retry_async
 
 
-async def transcribe_audio(file: UploadFile, language: str) -> TranscriptionResponse:
+async def transcribe_audio(file: UploadFile, language: str, request_id: Optional[str] = None) -> TranscriptionResponse:
     if language not in ALLOWED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Language must be one of {ALLOWED_LANGUAGES}")
 
@@ -25,7 +26,7 @@ async def transcribe_audio(file: UploadFile, language: str) -> TranscriptionResp
 
         async def _do():
             async with httpx.AsyncClient(timeout=ASR_TIMEOUT) as client:
-                r = await client.post(url, files=files)
+                r = await client.post(url, files=files, headers={"X-Request-ID": request_id} if request_id else None)
                 if r.status_code != 200:
                     raise HTTPException(status_code=500, detail=f"Transcription failed: {r.text or r.status_code}")
                 data = r.json()
@@ -49,7 +50,10 @@ async def transcribe_audio(file: UploadFile, language: str) -> TranscriptionResp
 
         async def _do():
             async with httpx.AsyncClient(timeout=ASR_TIMEOUT) as client:
-                r = await client.post(external_url, files=files, headers={"accept": "application/json"})
+                headers = {"accept": "application/json"}
+                if request_id:
+                    headers["X-Request-ID"] = request_id
+                r = await client.post(external_url, files=files, headers=headers)
                 r.raise_for_status()
                 return TranscriptionResponse(text=r.json().get("text", "") or "")
 

@@ -3,30 +3,36 @@ import os
 from typing import Any, Dict, Optional
 
 import httpx
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, Query
 from fastapi.responses import JSONResponse, Response
 
 from config import TTS_TIMEOUT, logger
-from deps import limiter
-from models import ALLOWED_LANGUAGES, ChatRequest
+from deps import limiter, require_api_key
+from models import ALLOWED_LANGUAGES, ALLOWED_AGENTS, ChatRequest, DEFAULT_AGENT_NAME
 from services import call_agent, call_llm, get_session_context, append_to_session, transcribe_audio
 
 router = APIRouter(prefix="/v1", tags=["Chat"])
+_MAX_SESSION_ID_LEN = 128
 
 
 @router.post("/chat", summary="Text chat")
 @limiter.limit("60/minute")
-async def chat(request: Request, payload: ChatRequest) -> Dict[str, Any]:
+async def chat(request: Request, payload: ChatRequest, _: None = Depends(require_api_key)) -> Dict[str, Any]:
     text = (payload.text or "").strip()
+    request_id = getattr(request.state, "request_id", None)
     if not text:
         raise HTTPException(status_code=400, detail="Text must not be empty")
 
     session_id = (request.headers.get("X-Session-ID") or "").strip() or None
+    if session_id and len(session_id) > _MAX_SESSION_ID_LEN:
+        raise HTTPException(status_code=400, detail=f"X-Session-ID must be <= {_MAX_SESSION_ID_LEN} characters")
     context = get_session_context(session_id) if session_id else []
 
     if payload.mode == "agent":
-        selected_agent = payload.agent_name or "travel_planner"
-        agent_result = await call_agent(selected_agent, text, session_id=session_id)
+        selected_agent = payload.agent_name or DEFAULT_AGENT_NAME
+        if selected_agent not in ALLOWED_AGENTS:
+            raise HTTPException(status_code=400, detail=f"agent_name must be one of {ALLOWED_AGENTS}")
+        agent_result = await call_agent(selected_agent, text, session_id=session_id, request_id=request_id)
         reply = agent_result["reply"]
         out: Dict[str, Any] = {"user": text, "reply": reply}
         if agent_result.get("warehouse_state") is not None:
@@ -37,7 +43,7 @@ async def chat(request: Request, payload: ChatRequest) -> Dict[str, Any]:
             append_to_session(session_id, text, reply)
         return out
     else:
-        reply = await call_llm(text, context=context)
+        reply = await call_llm(text, context=context, request_id=request_id)
         if session_id:
             append_to_session(session_id, text, reply)
         return {"user": text, "reply": reply}
@@ -60,6 +66,7 @@ async def chat(request: Request, payload: ChatRequest) -> Dict[str, Any]:
 @limiter.limit("20/minute")
 async def speech_to_speech(
     request: Request,
+    _: None = Depends(require_api_key),
     file: UploadFile = File(..., description="Audio file to process"),
     language: str = Query(..., description="Language of the audio (e.g. kannada, hindi, tamil, malayalam, telugu, marathi, english, german)"),
     mode: str = Query("llm", description="Processing mode: 'llm' or 'agent'"),
@@ -67,6 +74,8 @@ async def speech_to_speech(
 ) -> Response:
     if language not in ALLOWED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Language must be one of {ALLOWED_LANGUAGES}")
+    if mode not in {"llm", "agent"}:
+        raise HTTPException(status_code=400, detail="mode must be 'llm' or 'agent'")
 
     logger.debug("Processing speech-to-speech request", extra={
         "endpoint": "/v1/speech_to_speech",
@@ -77,19 +86,24 @@ async def speech_to_speech(
 
     try:
         session_id = (request.headers.get("X-Session-ID") or "").strip() or None
+        request_id = getattr(request.state, "request_id", None)
+        if session_id and len(session_id) > _MAX_SESSION_ID_LEN:
+            raise HTTPException(status_code=400, detail=f"X-Session-ID must be <= {_MAX_SESSION_ID_LEN} characters")
         context = get_session_context(session_id) if session_id else []
 
-        asr_text = await transcribe_audio(file=file, language=language)
+        asr_text = await transcribe_audio(file=file, language=language, request_id=request_id)
         text = asr_text.text
         if not text or not text.strip():
             raise HTTPException(status_code=400, detail="No speech detected in the audio")
 
         if mode == "agent":
-            selected_agent = agent_name or "travel_planner"
-            agent_result = await call_agent(selected_agent, text, session_id=session_id)
+            selected_agent = agent_name or DEFAULT_AGENT_NAME
+            if selected_agent not in ALLOWED_AGENTS:
+                raise HTTPException(status_code=400, detail=f"agent_name must be one of {ALLOWED_AGENTS}")
+            agent_result = await call_agent(selected_agent, text, session_id=session_id, request_id=request_id)
             llm_text = agent_result["reply"]
         else:
-            llm_text = await call_llm(text, context=context)
+            llm_text = await call_llm(text, context=context, request_id=request_id)
 
         if not llm_text or not llm_text.strip():
             raise HTTPException(status_code=502, detail="Text for TTS is empty")
@@ -102,7 +116,11 @@ async def speech_to_speech(
             tts_response = await client.post(
                 base_url,
                 json={"text": llm_text},
-                headers={"accept": "*/*", "Content-Type": "application/json"},
+                headers={
+                    "accept": "*/*",
+                    "Content-Type": "application/json",
+                    **({"X-Request-ID": request_id} if request_id else {}),
+                },
             )
             tts_response.raise_for_status()
             audio_bytes = tts_response.content

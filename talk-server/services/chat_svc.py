@@ -10,7 +10,11 @@ from config import AGENT_BASE_URL, LLM_MODEL, LLM_TIMEOUT, logger
 from services.retry import retry_async
 
 
-async def call_llm(user_text: str, context: Optional[List[Dict[str, str]]] = None) -> str:
+async def call_llm(
+    user_text: str,
+    context: Optional[List[Dict[str, str]]] = None,
+    request_id: Optional[str] = None,
+) -> str:
     """Send text to OpenAI-compatible LLM with optional conversation context."""
     base_url = os.getenv("DWANI_API_BASE_URL_LLM", "").rstrip("/")
     if not base_url:
@@ -23,11 +27,13 @@ async def call_llm(user_text: str, context: Optional[List[Dict[str, str]]] = Non
         messages.extend(context)
     messages.append({"role": "user", "content": user_text})
     try:
-        client = AsyncOpenAI(base_url=api_base, api_key="dummy", timeout=httpx.Timeout(LLM_TIMEOUT))
+        llm_api_key = os.getenv("DWANI_LLM_API_KEY", "dummy")
+        client = AsyncOpenAI(base_url=api_base, api_key=llm_api_key, timeout=httpx.Timeout(LLM_TIMEOUT))
         response = await client.chat.completions.create(
             model=LLM_MODEL,
             messages=messages,
             max_tokens=256,
+            extra_headers={"X-Request-ID": request_id} if request_id else None,
         )
     except OpenAIAPIError as e:
         logger.error(f"LLM API error: {e}")
@@ -41,7 +47,12 @@ async def call_llm(user_text: str, context: Optional[List[Dict[str, str]]] = Non
     return " ".join(str(content).strip().split())
 
 
-async def call_agent(agent_name: str, user_text: str, session_id: Optional[str]) -> Dict[str, Any]:
+async def call_agent(
+    agent_name: str,
+    user_text: str,
+    session_id: Optional[str],
+    request_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Send text to agents service. Returns reply and optional state payloads."""
     if not AGENT_BASE_URL:
         raise HTTPException(status_code=502, detail="Agent service base URL is not configured")
@@ -50,10 +61,16 @@ async def call_agent(agent_name: str, user_text: str, session_id: Optional[str])
 
     url = f"{AGENT_BASE_URL}/v1/agents/{agent_name}/chat"
     payload = {"session_id": session_id, "message": user_text}
+    agents_api_key = os.getenv("AGENTS_API_KEY", "").strip()
+    headers = {"Content-Type": "application/json"}
+    if agents_api_key:
+        headers["X-API-Key"] = agents_api_key
+    if request_id:
+        headers["X-Request-ID"] = request_id
 
     async def _do():
         async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
-            return await client.post(url, json=payload)
+            return await client.post(url, json=payload, headers=headers)
 
     try:
         resp = await retry_async(_do)

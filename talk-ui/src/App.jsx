@@ -1,36 +1,10 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
-import { Link, NavLink } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
+import { sendChatRequest, sendSpeechRequest } from './lib/apiClient'
+import { base64ToBlob } from './lib/audio'
+import { createSessionId, getOrCreateSessionId, loadConversations, saveConversations, setSessionId as persistSessionId } from './lib/session'
+import { useAudioRecorder } from './hooks/useAudioRecorder'
 
-const SESSION_KEY = 'talk_session_id'
-const CONVERSATIONS_KEY = 'talk_conversations'
-const MAX_CONVERSATIONS_STORED = 50
-
-function getOrCreateSessionId() {
-  let id = sessionStorage.getItem(SESSION_KEY)
-  if (!id) {
-    id = crypto.randomUUID?.() || `s-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    sessionStorage.setItem(SESSION_KEY, id)
-  }
-  return id
-}
-
-function loadConversations() {
-  try {
-    const raw = localStorage.getItem(CONVERSATIONS_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.slice(-MAX_CONVERSATIONS_STORED) : []
-  } catch {
-    return []
-  }
-}
-
-function saveConversations(list) {
-  try {
-    const toSave = list.slice(-MAX_CONVERSATIONS_STORED)
-    localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(toSave))
-  } catch (_) {}
-}
 
 const LANGUAGES = [
   { value: 'kannada', label: 'Kannada' },
@@ -43,16 +17,7 @@ const LANGUAGES = [
   { value: 'german', label: 'German' },
 ]
 
-const API_BASE = import.meta.env.VITE_API_URL || ''
-
-function base64ToBlob(base64, mime) {
-  const byteChars = atob(base64)
-  const byteNumbers = new Array(byteChars.length)
-  for (let i = 0; i < byteChars.length; i++) {
-    byteNumbers[i] = byteChars.charCodeAt(i)
-  }
-  return new Blob([new Uint8Array(byteNumbers)], { type: mime })
-}
+const API_KEY = import.meta.env.VITE_API_KEY || ''
 
 export default function App() {
   const [language, setLanguage] = useState('kannada')
@@ -70,9 +35,7 @@ export default function App() {
   const [canRetry, setCanRetry] = useState(false)
   const [progressStep, setProgressStep] = useState(null)
   const lastFailedRequestRef = useRef(null)
-  const mediaRecorderRef = useRef(null)
-  const chunksRef = useRef([])
-  const streamRef = useRef(null)
+  const currentAudioRef = useRef(null)
 
   useEffect(() => {
     saveConversations(conversations)
@@ -99,16 +62,6 @@ export default function App() {
     }
   }, [])
 
-  const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop()
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop())
-      streamRef.current = null
-    }
-  }, [])
-
   const sendAndPlay = useCallback(
     async (blob) => {
       if (!blob || blob.size === 0) {
@@ -119,30 +72,15 @@ export default function App() {
       setStatus('processing')
       setError(null)
       setProgressStep('transcribing')
-      const formData = new FormData()
-      const ext = blob.type.includes('webm') ? 'webm' : 'wav'
-      formData.append('file', blob, `recording.${ext}`)
       try {
-        const isAgent = mode === 'agent'
-        const params = new URLSearchParams({
+        const data = await sendSpeechRequest({
+          blob,
           language,
-          format: 'json',
-          mode: isAgent ? 'agent' : 'llm',
+          mode: mode === 'agent' ? 'agent' : 'llm',
+          agentName,
+          sessionId,
+          apiKey: API_KEY,
         })
-        if (isAgent) {
-          params.set('agent_name', agentName)
-        }
-        const url = `${API_BASE}/v1/speech_to_speech?${params.toString()}`
-        const res = await fetch(url, {
-          method: 'POST',
-          body: formData,
-          headers: { 'X-Session-ID': sessionId },
-        })
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}))
-          throw new Error(err.detail || `Server error ${res.status}`)
-        }
-        const data = await res.json()
         const { transcription, llm_response, audio_base64 } = data
 
         setConversations((prev) => [
@@ -159,13 +97,16 @@ export default function App() {
         const audioBlob = base64ToBlob(audio_base64, 'audio/mp3')
         const audioUrl = URL.createObjectURL(audioBlob)
         const audio = new Audio(audioUrl)
+        currentAudioRef.current = audio
         setStatus('playing')
         audio.onended = () => {
           URL.revokeObjectURL(audioUrl)
+          currentAudioRef.current = null
           setStatus('idle')
         }
         audio.onerror = () => {
           URL.revokeObjectURL(audioUrl)
+          currentAudioRef.current = null
           setStatus('idle')
           setError('Failed to play response')
         }
@@ -181,9 +122,21 @@ export default function App() {
     [language, mode, agentName, sessionId]
   )
 
+  const { startRecording, stopRecording } = useAudioRecorder(sendAndPlay)
+
+  useEffect(() => {
+    return () => {
+      stopRecording()
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause()
+        currentAudioRef.current = null
+      }
+    }
+  }, [stopRecording])
+
   const startNewConversation = useCallback(() => {
-    const newId = crypto.randomUUID?.() || `s-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    sessionStorage.setItem(SESSION_KEY, newId)
+    const newId = createSessionId()
+    persistSessionId(newId)
     setSessionId(newId)
     setConversations([])
     setError(null)
@@ -196,37 +149,15 @@ export default function App() {
     setError(null)
   }, [])
 
-  const onDataAvailable = useCallback((e) => {
-    if (e.data.size > 0) chunksRef.current.push(e.data)
-  }, [])
-
-  const onStop = useCallback(() => {
-    const blob = new Blob(chunksRef.current, { type: 'audio/wav' })
-    chunksRef.current = []
-    sendAndPlay(blob)
-  }, [sendAndPlay])
-
-  const startRecording = useCallback(async () => {
-    setError(null)
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      streamRef.current = stream
-      const recorder = new MediaRecorder(stream)
-      mediaRecorderRef.current = recorder
-      chunksRef.current = []
-      recorder.ondataavailable = onDataAvailable
-      recorder.onstop = onStop
-      recorder.start(200)
-      setStatus('recording')
-    } catch (e) {
-      setError('Microphone access denied or unavailable')
-      setStatus('idle')
-    }
-  }, [onDataAvailable, onStop])
-
   const handlePointerDown = () => {
     if (status !== 'idle' && status !== 'error') return
+    setError(null)
     startRecording()
+      .then(() => setStatus('recording'))
+      .catch(() => {
+        setError('Microphone access denied or unavailable')
+        setStatus('idle')
+      })
   }
 
   const handlePointerUp = () => {
@@ -234,6 +165,19 @@ export default function App() {
   }
 
   const handlePointerLeave = () => {
+    if (status === 'recording') stopRecording()
+  }
+
+  const handleMicKeyDown = (e) => {
+    if (e.key !== ' ' && e.key !== 'Enter') return
+    e.preventDefault()
+    if (status !== 'idle' && status !== 'error') return
+    handlePointerDown()
+  }
+
+  const handleMicKeyUp = (e) => {
+    if (e.key !== ' ' && e.key !== 'Enter') return
+    e.preventDefault()
     if (status === 'recording') stopRecording()
   }
 
@@ -245,30 +189,13 @@ export default function App() {
     setError(null)
 
     try {
-      const isAgent = mode === 'agent'
-      const payload = {
+      const data = await sendChatRequest({
         text,
-        mode: isAgent ? 'agent' : 'llm',
-      }
-      if (isAgent) {
-        payload.agent_name = agentName
-      }
-
-      const res = await fetch(`${API_BASE}/v1/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Session-ID': sessionId,
-        },
-        body: JSON.stringify(payload),
+        mode: mode === 'agent' ? 'agent' : 'llm',
+        agentName,
+        sessionId,
+        apiKey: API_KEY,
       })
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || `Server error ${res.status}`)
-      }
-
-      const data = await res.json()
       const assistant = data.reply || '(no response)'
 
       setConversations((prev) => [
@@ -297,23 +224,18 @@ export default function App() {
     if (last?.type === 'speech' && last.blob) {
       sendAndPlay(last.blob)
     } else if (last?.type === 'chat' && last.text) {
-      setTypedMessage(last.text)
-      setStatus('idle')
       lastFailedRequestRef.current = null
       setStatus('processing')
-      const payload = { text: last.text, mode: mode === 'agent' ? 'agent' : 'llm' }
-      if (mode === 'agent') payload.agent_name = agentName
-      fetch(`${API_BASE}/v1/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
-        body: JSON.stringify(payload),
+      sendChatRequest({
+        text: last.text,
+        mode: mode === 'agent' ? 'agent' : 'llm',
+        agentName,
+        sessionId,
+        apiKey: API_KEY,
       })
-        .then((res) => {
-          if (!res.ok) return res.json().then((err) => { throw new Error(err.detail || `Server error ${res.status}`) })
-          return res.json()
-        })
         .then((data) => {
           setConversations((prev) => [...prev, { id: Date.now(), user: last.text, assistant: data.reply || '(no response)', timestamp: new Date().toLocaleTimeString() }])
+          setTypedMessage('')
           setStatus('idle')
         })
         .catch((e) => {
@@ -392,7 +314,9 @@ export default function App() {
           )}
         </div>
         <div className="conversation-input">
+          <label htmlFor="typed-message" className="sr-only">Type message</label>
           <textarea
+            id="typed-message"
             rows={2}
             placeholder="Type your message…"
             value={typedMessage}
@@ -520,6 +444,8 @@ export default function App() {
             onPointerDown={handlePointerDown}
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerLeave}
+            onKeyDown={handleMicKeyDown}
+            onKeyUp={handleMicKeyUp}
             disabled={status === 'processing'}
             aria-label={statusLabel}
           >
@@ -529,12 +455,12 @@ export default function App() {
         </div>
 
         {!isOnline && (
-          <div className="offline" role="status">
+          <div className="offline" role="status" aria-live="polite">
             You are offline. Check your connection.
           </div>
         )}
         {error && (
-          <div className="error" role="alert">
+          <div className="error" role="alert" aria-live="assertive">
             <span>{error}</span>
             {canRetry && (
               <button type="button" className="btn-retry" onClick={retryLastRequest}>

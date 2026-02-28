@@ -1,8 +1,8 @@
 """Pydantic models and shared enums. Single source of truth for allowed languages."""
 from enum import Enum
-from typing import Optional
+from typing import Optional, Literal
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 class SupportedLanguage(str, Enum):
@@ -18,6 +18,15 @@ class SupportedLanguage(str, Enum):
 
 
 ALLOWED_LANGUAGES = [lang.value for lang in SupportedLanguage]
+ALLOWED_AGENTS = [
+    "travel_planner",
+    "viva_examiner",
+    "fix_my_city",
+    "orchestrator",
+    "warehouse_orchestrator",
+    "chess_orchestrator",
+]
+DEFAULT_AGENT_NAME = "travel_planner"
 
 
 class TranscriptionResponse(BaseModel):
@@ -39,8 +48,20 @@ class WarehouseCommandRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    text: str = Field(..., description="User message text")
-    mode: str = Field("llm", description="Processing mode: 'llm' or 'agent'")
+    text: str = Field(..., description="User message text", min_length=1, max_length=4000)
+    mode: Literal["llm", "agent"] = Field("llm", description="Processing mode: 'llm' or 'agent'")
     agent_name: Optional[str] = Field(
-        None, description="Agent name when mode='agent' (defaults to 'travel_planner')"
+        None,
+        description="Agent name when mode='agent' (defaults to 'travel_planner')",
+        min_length=1,
+        max_length=64,
     )
+
+    @field_validator("agent_name")
+    @classmethod
+    def validate_agent_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        if value not in ALLOWED_AGENTS:
+            raise ValueError(f"agent_name must be one of {ALLOWED_AGENTS}")
+        return value

@@ -16,7 +16,7 @@ Try it: [talk.dwani.ai](https://talk.dwani.ai)
 |------|--------|
 | **Docker (host ASR/TTS/LLM)** | `cp .env.example .env` → `docker compose up -d` → http://localhost |
 | **Docker dev (build from source)** | `docker compose -f compose-dev.yml up -d --build` |
-| **Production (integrated TTS + LLM)** | `docker compose -f compose-integrated.yml up -d` |
+| **Production (integrated TTS + LLM)** | `docker compose -f compose-integrated-qwen.yml up -d` |
 | **Local Python** | Set env URLs → `cd talk-server && pip install -r requirements.txt && python main.py` |
 
 ## Running
@@ -25,7 +25,7 @@ Try it: [talk.dwani.ai](https://talk.dwani.ai)
 Copy `.env.example` to `.env`, set `DWANI_API_BASE_URL_*` if needed (defaults use `host.docker.internal:10803/10804/10802`). Run `docker compose up -d`. Open http://localhost.
 
 **Integrated stack (TTS + LLM in compose; ASR on host):**  
-Run `docker compose -f compose-integrated.yml up -d`. Needs GPU. Open http://localhost.
+Run `docker compose -f compose-integrated-qwen.yml up -d`. Needs GPU. Open http://localhost.
 
 **Local Python (no UI):**  
 Export `DWANI_API_BASE_URL_ASR`, `DWANI_API_BASE_URL_TTS`, `DWANI_API_BASE_URL_LLM`. Then `cd talk-server && pip install -r requirements.txt && python main.py`. API at http://localhost:8000.
@@ -51,6 +51,13 @@ The UI can use the **LLM** or an **ADK agent** (travel planner, viva examiner, f
 | `DWANI_API_BASE_URL_LLM` | Yes | LLM URL (OpenAI-compatible) |
 | `DWANI_LLM_MODEL` | No | Model name (default: `gemma3`) |
 | `DWANI_AGENT_BASE_URL` | No | Agents service URL in agent mode (e.g. `http://agents:8081`) |
+| `DWANI_API_KEY` | No | Optional API key required by talk-server when set |
+| `DWANI_REDIS_URL` | No | Redis URL for persistent chat sessions |
+| `AGENTS_API_KEY` | No | Optional API key required by agents service when set |
+| `AGENTS_REDIS_URL` | No | Redis URL for agent conversation history persistence |
+| `DWANI_TALK_SERVER_TAG` | No | Docker image tag for talk-server (default: `latest`) |
+| `DWANI_TALK_UI_TAG` | No | Docker image tag for talk-ui (default: `latest`) |
+| `DWANI_TALK_AGENTS_TAG` | No | Docker image tag for agents (default: `latest`) |
 
 See [.env.example](.env.example) for timeouts, limits, and session options.
 
@@ -67,4 +74,6 @@ curl -X POST 'http://localhost:8000/v1/speech_to_speech?language=kannada' \
 
 - [agents/README.md](agents/README.md) — Agent mode, ADK setup, and agents service.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Architecture diagram, tech stack, Docker build, Chess tab.
+- [docs/runbook.md](docs/runbook.md) — Production runbook and incident handling.
+- [docs/RELEASE.md](docs/RELEASE.md) — Release/versioning workflow.
 - [.env.example](.env.example) — All optional env vars.
