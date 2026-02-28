@@ -5,12 +5,14 @@ from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 from google.adk import Agent
 from google.adk.models.lite_llm import LiteLlm
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
 from chess.state_store import get_state
 from chess.commands import execute_chess_command
-from chess.ai_agent import choose_ai_move
+from chess.ai_agent import choose_ai_move, root_chess_ai_agent
 
 load_dotenv()
 
@@ -19,6 +21,56 @@ MODEL = LiteLlm(
     api_base=os.getenv("LITELLM_API_BASE"),
     api_key=os.getenv("LITELLM_API_KEY"),
 )
+
+APP_NAME = os.getenv("AGENTS_APP_NAME", "talk_chess")
+_ai_session_service = InMemorySessionService()
+_known_ai_sessions: set[str] = set()
+_ai_runner = Runner(
+    agent=root_chess_ai_agent,
+    app_name=APP_NAME,
+    session_service=_ai_session_service,
+)
+
+
+def _session_id_from_context(tool_context: ToolContext) -> str:
+    return (
+        getattr(tool_context, "session_id", None)
+        or getattr(getattr(tool_context, "session", None), "id", None)
+        or "default"
+    )
+
+
+async def _ensure_ai_session_async(user_id: str, session_id: str) -> None:
+    key = f"{user_id}:{session_id}"
+    if key in _known_ai_sessions:
+        return
+    await _ai_session_service.create_session(
+        app_name=APP_NAME,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    _known_ai_sessions.add(key)
+
+
+async def _run_ai_subagent_message_async(session_id: str, message: str) -> str:
+    await _ensure_ai_session_async(user_id=session_id, session_id=session_id)
+    content = types.Content(role="user", parts=[types.Part(text=message)])
+    events = _ai_runner.run_async(
+        user_id=session_id,
+        session_id=session_id,
+        new_message=content,
+    )
+
+    final_text_parts: list[str] = []
+    async for event in events:
+        if getattr(event, "is_final_response", None) and event.is_final_response() and event.content:
+            for p in event.content.parts:
+                text = getattr(p, "text", None)
+                if text:
+                    final_text_parts.append(str(text))
+    if not final_text_parts:
+        raise RuntimeError("Chess AI sub-agent returned empty response")
+    return " ".join(" ".join(final_text_parts).split())
 
 
 def _parse_square_move(message: str) -> Optional[Dict[str, str]]:
@@ -98,9 +150,87 @@ def _parse_user_command(message: str) -> Dict[str, Any]:
     )
 
 
-def call_chess_ai(tool_context: ToolContext, side: str = "black") -> Dict[str, Any]:
-    """Choose one legal AI move for side; does not apply it."""
-    return choose_ai_move(side=side)
+async def call_chess_ai(tool_context: ToolContext, side: str = "black") -> Dict[str, Any]:
+    """Choose one legal AI move for side via sub-agent; does not apply it."""
+    side_key = (side or "black").strip().lower()
+    if side_key not in {"white", "black"}:
+        return {
+            "success": False,
+            "error": "side must be white or black",
+            "verified_fact": "side must be white or black",
+        }
+    session_id = _session_id_from_context(tool_context)
+    # Invoke dedicated AI agent for planning text-level suggestion.
+    try:
+        ai_reply = await _run_ai_subagent_message_async(
+            session_id=session_id,
+            message=f"Choose a legal move for {side_key}.",
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": f"AI planner failed: {exc}",
+            "verified_fact": f"AI planner failed: {exc}",
+        }
+    # Deterministic move payload still comes from command helper.
+    choice = choose_ai_move(side=side_key)
+    if not choice.get("success"):
+        err = choice.get("error") or f"No legal moves for {side_key}."
+        return {"success": False, "error": err, "verified_fact": err}
+    return {
+        "success": True,
+        "verified_fact": choice["verified_fact"],
+        "ai_reply": ai_reply,
+        "from_square": choice["from_square"],
+        "to_square": choice["to_square"],
+        "piece": choice["piece"],
+        "side": side_key,
+    }
+
+
+def _is_ai_turn(state: Dict[str, Any]) -> bool:
+    mode = state.get("mode")
+    status = state.get("status", "in_progress")
+    turn = state.get("turn")
+    human_side = state.get("human_side", "white")
+    if mode != "human_vs_ai" or status != "in_progress":
+        return False
+    if turn not in {"white", "black"} or human_side not in {"white", "black"}:
+        return False
+    return turn != human_side
+
+
+def _apply_ai_move_if_needed(state: Dict[str, Any]) -> Dict[str, Any]:
+    """If it's AI turn in human_vs_ai mode, apply exactly one legal AI move."""
+    if not _is_ai_turn(state):
+        return {
+            "applied": False,
+            "reply": "",
+            "chess_state": state,
+        }
+
+    ai_side = state.get("turn", "black")
+    ai = choose_ai_move(side=ai_side)
+    if not ai.get("success"):
+        msg = ai.get("error") or f"No legal moves for {ai_side}."
+        return {
+            "applied": False,
+            "reply": msg,
+            "chess_state": state,
+            "error": msg,
+        }
+
+    out = execute_chess_command(
+        "move",
+        from_square=ai["from_square"],
+        to_square=ai["to_square"],
+        side=ai_side,
+    )
+    return {
+        "applied": True,
+        "reply": out["reply"],
+        "chess_state": out["chess_state"],
+    }
 
 
 def get_chess_state(tool_context: ToolContext) -> Dict[str, Any]:
@@ -121,6 +251,7 @@ def run_chess_command(tool_context: ToolContext, message: str) -> Dict[str, Any]
         return {"success": False, "error": str(exc), "verified_fact": str(exc)}
 
     action = parsed["action"]
+    state_before = get_state()
     try:
         if action == "ai_move":
             state = get_state()
@@ -141,6 +272,14 @@ def run_chess_command(tool_context: ToolContext, message: str) -> Dict[str, Any]
                 "chess_state": out["chess_state"],
             }
 
+        if (
+            action == "move"
+            and state_before.get("mode") == "human_vs_ai"
+            and state_before.get("turn") != state_before.get("human_side")
+        ):
+            err = "It is AI's turn. The AI will move first."
+            return {"success": False, "error": err, "verified_fact": err, "chess_state": state_before}
+
         out = execute_chess_command(
             parsed["action"],
             from_square=parsed.get("from_square"),
@@ -148,7 +287,23 @@ def run_chess_command(tool_context: ToolContext, message: str) -> Dict[str, Any]
             mode=parsed.get("mode"),
             human_side=parsed.get("human_side"),
         )
-        return {"success": True, "verified_fact": out["reply"], "chess_state": out["chess_state"]}
+        latest_state = out["chess_state"]
+        ai_followup = _apply_ai_move_if_needed(latest_state)
+        if ai_followup.get("applied"):
+            combined = f"{out['reply']} AI moved: {ai_followup['reply']}"
+            return {
+                "success": True,
+                "verified_fact": combined,
+                "chess_state": ai_followup["chess_state"],
+            }
+        if ai_followup.get("error"):
+            combined = f"{out['reply']} AI could not move: {ai_followup['error']}"
+            return {
+                "success": True,
+                "verified_fact": combined,
+                "chess_state": ai_followup["chess_state"],
+            }
+        return {"success": True, "verified_fact": out["reply"], "chess_state": latest_state}
     except ValueError as exc:
         err = str(exc)
         return {"success": False, "error": err, "verified_fact": f"Command failed: {err}"}

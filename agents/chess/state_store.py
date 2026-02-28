@@ -63,10 +63,19 @@ def _init_default_state() -> None:
                 "human_side": "white",
                 "status": "in_progress",
                 "winner": None,
+                "result": None,
                 "move_history": [],
                 "last_move": None,
                 "captured_white": [],
                 "captured_black": [],
+                "castling_rights": {
+                    "white": {"king_side": True, "queen_side": True},
+                    "black": {"king_side": True, "queen_side": True},
+                },
+                "en_passant_target": None,
+                "halfmove_clock": 0,
+                "fullmove_number": 1,
+                "position_counts": {},
             }
         )
 
