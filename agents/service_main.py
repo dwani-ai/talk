@@ -13,7 +13,12 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from warehouse.state_store import get_state as get_warehouse_state_snapshot
+from warehouse.state_store import (
+    get_state as get_warehouse_state_snapshot,
+    update_robot_position,
+    update_robot_status,
+    upsert_item,
+)
 
 # Ensure we can import the travel-planner and viva-examiner agent modules
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -109,6 +114,32 @@ class ChatResponse(BaseModel):
     )
 
 
+class WarehouseCommandRequest(BaseModel):
+    robot: str = Field(..., description="Robot to control: 'uav', 'ugv', or 'arm'.")
+    action: str | None = Field(
+        default=None,
+        description="Action: 'move', 'pick', 'drop', 'pick_from_stack', 'place_on_stack'.",
+    )
+    direction: str | None = Field(
+        default=None,
+        description="Optional direction: 'north', 'south', 'east', or 'west'.",
+    )
+    item_id: str | None = Field(default=None, description="Item ID for pick/drop/place_on_stack.")
+    stack_id: str | None = Field(default=None, description="Stack ID for pick_from_stack or place_on_stack.")
+    x: float | None = Field(
+        default=None,
+        description="Optional absolute X coordinate.",
+    )
+    y: float | None = Field(
+        default=None,
+        description="Optional absolute Y coordinate.",
+    )
+    z: float | None = Field(
+        default=None,
+        description="Optional absolute Z coordinate.",
+    )
+
+
 APP_NAME = os.getenv("AGENTS_APP_NAME", "talk_travel_planner")
 
 _session_service = InMemorySessionService()
@@ -175,6 +206,69 @@ def get_warehouse_state() -> Dict[str, Any]:
     if not isinstance(snapshot, dict):
         raise HTTPException(status_code=500, detail="Invalid warehouse state")
     return snapshot
+
+
+@app.post("/v1/warehouse/command")
+def warehouse_command(cmd: WarehouseCommandRequest) -> Dict[str, Any]:
+    """Deterministic warehouse command endpoint used by the UI.
+
+    This bypasses the LLM and directly updates the shared warehouse state,
+    so the 3D view always reflects the true robot positions.
+    """
+    robot_key = cmd.robot.strip().lower()
+    id_map = {"uav": "uav-1", "ugv": "ugv-1", "arm": "arm-1"}
+    robot_id = id_map.get(robot_key)
+    if not robot_id:
+        raise HTTPException(status_code=400, detail="robot must be one of: uav, ugv, arm")
+
+    state = get_warehouse_state_snapshot()
+    robots = state.get("robots", [])
+    current = next((r for r in robots if r.get("id") == robot_id), None) or {}
+    cx, cy, cz = (current.get("position") or [0.0, 0.0, 0.0])
+    cx, cy, cz = float(cx), float(cy), float(cz)
+
+    # Decide target position.
+    if cmd.x is not None and cmd.y is not None and cmd.z is not None:
+        tx, ty, tz = float(cmd.x), float(cmd.y), float(cmd.z)
+    elif cmd.direction:
+        direction = cmd.direction.strip().lower()
+        step = 5.0
+        dx = dz = 0.0
+        if direction == "north":
+            dz = -step
+        elif direction == "south":
+            dz = step
+        elif direction == "east":
+            dx = step
+        elif direction == "west":
+            dx = -step
+        # Simple ground / altitude handling.
+        if robot_key == "uav":
+            tx, ty, tz = cx + dx, 5.0, cz + dz
+        elif robot_key == "ugv":
+            tx, ty, tz = cx + dx, 0.0, cz + dz
+        else:  # arm
+            tx, ty, tz = cx + dx, cy, cz + dz
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either absolute coordinates (x,y,z) or a direction.",
+        )
+
+    updated = update_robot_position(robot_id, tx, ty, tz)
+    update_robot_status(robot_id, "idle", current_task=None)
+
+    # Refresh snapshot for clients that want updated robots/items.
+    new_state = get_warehouse_state_snapshot()
+    reply = (
+        f"{robot_id} moved to position "
+        f"[{updated['position'][0]}, {updated['position'][1]}, {updated['position'][2]}]."
+    )
+    return {
+        "reply": reply,
+        "robots": new_state.get("robots", []),
+        "items": new_state.get("items", []),
+    }
 
 
 def _ensure_session(user_id: str, session_id: str) -> None:

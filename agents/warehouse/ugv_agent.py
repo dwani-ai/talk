@@ -48,6 +48,8 @@ Capabilities via tools:
 - get_nearby_items(radius): list items within a radius of the robot.
 
 You MUST use these tools to change positions or move items; do not pretend you moved without calling a tool.
+Never say the UGV moved, picked, or dropped anything unless you have just called the corresponding tool
+and you base your answer on its returned position or item data.
 """
 
 

@@ -48,6 +48,8 @@ Tools:
 - get_stacks(): list stacks and their items.
 
 Stacks are represented by items that share the same stack_id. The item height is based on how many items are already in that stack.
+You MUST call these tools to move the arm or modify stacks; never claim that an item was picked or placed
+unless you have just used the appropriate tool and you are describing its result.
 """
 
 

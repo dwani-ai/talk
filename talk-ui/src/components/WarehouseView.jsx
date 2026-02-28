@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { Canvas } from '@react-three/fiber'
+import { Canvas, useFrame } from '@react-three/fiber'
 import { OrbitControls, Grid } from '@react-three/drei'
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
@@ -16,9 +16,11 @@ function getOrCreateSessionId() {
   return id
 }
 
+const LERP_SPEED = 5
+
 function Robot({ robot }) {
   if (!robot) return null
-  const [x, y, z] = robot.position || [0, 0, 0]
+  const [tx, ty, tz] = robot.position || [0, 0, 0]
   const type = robot.type
   const color = type === 'uav' ? '#38bdf8' : type === 'ugv' ? '#22c55e' : '#f97316'
   const scale =
@@ -28,8 +30,20 @@ function Robot({ robot }) {
         ? [1.0, 0.4, 1.4]
         : [0.5, 1.2, 0.5]
 
+  const groupRef = useRef()
+  const posRef = useRef([tx, ty, tz])
+
+  useFrame((_, delta) => {
+    if (!groupRef.current) return
+    const t = Math.min(1, delta * LERP_SPEED)
+    posRef.current[0] += (tx - posRef.current[0]) * t
+    posRef.current[1] += (ty - posRef.current[1]) * t
+    posRef.current[2] += (tz - posRef.current[2]) * t
+    groupRef.current.position.set(posRef.current[0], posRef.current[1], posRef.current[2])
+  })
+
   return (
-    <group position={[x, y, z]}>
+    <group ref={groupRef}>
       <mesh>
         <boxGeometry args={scale} />
         <meshStandardMaterial color={color} />
@@ -40,9 +54,21 @@ function Robot({ robot }) {
 
 function Item({ item }) {
   if (!item) return null
-  const [x, y, z] = item.position || [0, 0, 0]
+  const [tx, ty, tz] = item.position || [0, 0, 0]
+  const meshRef = useRef()
+  const posRef = useRef([tx, ty + 0.25, tz])
+
+  useFrame((_, delta) => {
+    if (!meshRef.current) return
+    const t = Math.min(1, delta * LERP_SPEED)
+    posRef.current[0] += (tx - posRef.current[0]) * t
+    posRef.current[1] += (ty + 0.25 - posRef.current[1]) * t
+    posRef.current[2] += (tz - posRef.current[2]) * t
+    meshRef.current.position.set(posRef.current[0], posRef.current[1], posRef.current[2])
+  })
+
   return (
-    <mesh position={[x, y + 0.25, z]}>
+    <mesh ref={meshRef}>
       <boxGeometry args={[0.5, 0.5, 0.5]} />
       <meshStandardMaterial color={item.stack_id ? '#eab308' : '#a855f7'} />
     </mesh>
@@ -83,6 +109,47 @@ export default function WarehouseView() {
     }
   }, [fetchState])
 
+  const trySendWarehouseCommand = useCallback(
+    async (text) => {
+      const lower = text.toLowerCase()
+      const moveMatch = lower.match(/^move\s+(uav|ugv|arm)\b/)
+      if (!moveMatch) return false
+      const robot = moveMatch[1]
+      const dirMatch = lower.match(/\b(north|south|east|west)\b/)
+      const payload = {
+        robot,
+        direction: dirMatch ? dirMatch[1] : null,
+      }
+      try {
+        const res = await fetch(`${API_BASE}/v1/warehouse/command`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.detail || `Server error ${res.status}`)
+        }
+        const data = await res.json()
+        const assistant = data.reply || 'Command applied.'
+        setChatLog((prev) => [
+          ...prev,
+          {
+            id: Date.now(),
+            user: text,
+            assistant,
+          },
+        ])
+        await fetchState()
+        return true
+      } catch (e) {
+        setError(e.message || 'Warehouse command failed')
+        return true
+      }
+    },
+    [fetchState]
+  )
+
   const sendCommand = useCallback(
     async (e) => {
       e.preventDefault()
@@ -93,43 +160,45 @@ export default function WarehouseView() {
       setError(null)
 
       try {
-        const payload = {
-          text,
-          mode: 'agent',
-          agent_name: 'warehouse_orchestrator',
+        const handled = await trySendWarehouseCommand(text)
+        if (!handled) {
+          const payload = {
+            text,
+            mode: 'agent',
+            agent_name: 'warehouse_orchestrator',
+          }
+          const res = await fetch(`${API_BASE}/v1/chat`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Session-ID': sessionId,
+            },
+            body: JSON.stringify(payload),
+          })
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}))
+            throw new Error(err.detail || `Server error ${res.status}`)
+          }
+          const data = await res.json()
+          const assistant = data.reply || '(no response)'
+          setChatLog((prev) => [
+            ...prev,
+            {
+              id: Date.now(),
+              user: text,
+              assistant,
+            },
+          ])
+          fetchState()
         }
-        const res = await fetch(`${API_BASE}/v1/chat`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Session-ID': sessionId,
-          },
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}))
-          throw new Error(err.detail || `Server error ${res.status}`)
-        }
-        const data = await res.json()
-        const assistant = data.reply || '(no response)'
-        setChatLog((prev) => [
-          ...prev,
-          {
-            id: Date.now(),
-            user: text,
-            assistant,
-          },
-        ])
         setCommand('')
         setChatStatus('idle')
-        // Trigger a state refresh so 3D view updates quickly.
-        fetchState()
       } catch (e) {
         setError(e.message || 'Command failed')
         setChatStatus('idle')
       }
     },
-    [command, chatStatus, sessionId, fetchState]
+    [command, chatStatus, sessionId, fetchState, trySendWarehouseCommand]
   )
 
   const { warehouse, robots, items } = state
@@ -159,6 +228,15 @@ export default function WarehouseView() {
 
         <div className="warehouse-layout">
           <div className="warehouse-canvas">
+            <button
+              type="button"
+              className="warehouse-refresh"
+              onClick={fetchState}
+              title="Refresh 3D view"
+              aria-label="Refresh 3D view"
+            >
+              ↻ Refresh
+            </button>
             <Canvas camera={{ position: [20, 25, 30], fov: 45 }}>
               <color attach="background" args={['#020617']} />
               <ambientLight intensity={0.4} />
