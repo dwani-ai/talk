@@ -65,3 +65,34 @@ class ChatRequest(BaseModel):
         if value not in ALLOWED_AGENTS:
             raise ValueError(f"agent_name must be one of {ALLOWED_AGENTS}")
         return value
+
+
+class SignupRequest(BaseModel):
+    email: str = Field(..., min_length=5, max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        email = (value or "").strip().lower()
+        if "@" not in email or "." not in email.split("@")[-1]:
+            raise ValueError("email must be a valid email address")
+        return email
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., min_length=5, max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        email = (value or "").strip().lower()
+        if "@" not in email or "." not in email.split("@")[-1]:
+            raise ValueError("email must be a valid email address")
+        return email
+
+
+class UserResponse(BaseModel):
+    id: int
+    email: str

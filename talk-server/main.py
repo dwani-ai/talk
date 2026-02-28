@@ -11,9 +11,10 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from auth_store import init_auth_db, log_auth_db_config
 from config import logger
 from deps import limiter
-from routers import chat, chess, health, warehouse
+from routers import auth, chat, chess, health, warehouse
 
 # App
 app = FastAPI(
@@ -65,6 +66,8 @@ _setup_metrics()
 
 @app.on_event("startup")
 async def validate_required_env() -> None:
+    init_auth_db()
+    log_auth_db_config()
     if os.getenv("DWANI_ENFORCE_ENV", "0") != "1":
         return
     required = [
@@ -141,7 +144,8 @@ async def cors_middleware(request: Request, call_next):
             headers={
                 "Access-Control-Allow-Origin": origin,
                 "Access-Control-Allow-Methods": "GET, POST, OPTIONS, HEAD",
-                "Access-Control-Allow-Headers": "Content-Type, X-Session-ID, X-Request-ID",
+                "Access-Control-Allow-Headers": "Content-Type, X-Session-ID, X-Request-ID, X-API-Key, Authorization",
+                "Access-Control-Allow-Credentials": "true",
                 "Access-Control-Max-Age": "86400",
             },
         )
@@ -149,7 +153,8 @@ async def cors_middleware(request: Request, call_next):
     if _cors_allow_origin(origin):
         response.headers["Access-Control-Allow-Origin"] = origin
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, HEAD"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Session-ID, X-Request-ID"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Session-ID, X-Request-ID, X-API-Key, Authorization"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
     response.headers["Access-Control-Max-Age"] = "86400"
     return response
 
@@ -157,7 +162,7 @@ async def cors_middleware(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_EXPLICIT_ORIGINS,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -179,6 +184,7 @@ app.include_router(health.router)
 app.include_router(warehouse.router)
 app.include_router(chess.router)
 app.include_router(chat.router)
+app.include_router(auth.router)
 
 
 if __name__ == "__main__":

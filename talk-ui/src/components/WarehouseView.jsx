@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { NavLink } from 'react-router-dom'
+import { Link, NavLink } from 'react-router-dom'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { OrbitControls, Grid } from '@react-three/drei'
+import { useAuth } from '../contexts/AuthContext'
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
@@ -76,6 +77,7 @@ function Item({ item }) {
 }
 
 export default function WarehouseView() {
+  const { currentUser, isAuthenticated, logout } = useAuth()
   const [state, setState] = useState({ warehouse: null, robots: [], items: [] })
   const [error, setError] = useState(null)
   const [sessionId] = useState(() => getOrCreateSessionId())
@@ -85,7 +87,7 @@ export default function WarehouseView() {
 
   const fetchState = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/v1/warehouse/state`)
+      const res = await fetch(`${API_BASE}/v1/warehouse/state`, { credentials: 'include' })
       if (!res.ok) {
         throw new Error(`Server error ${res.status}`)
       }
@@ -125,6 +127,7 @@ export default function WarehouseView() {
       try {
         const res = await fetch(`${API_BASE}/v1/chat`, {
           method: 'POST',
+          credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
             'X-Session-ID': sessionId,
@@ -181,21 +184,36 @@ export default function WarehouseView() {
       <main className="main warehouse-main">
         <header>
           <div className="header-main">
-            <div>
+            <div className="header-brand">
               <h1>Warehouse robots</h1>
               <p className="tagline">Live 3D view of UAV, UGV, and arm state. Commands (e.g. ugv pick item-1) run via the agent and update the view.</p>
             </div>
-            <nav className="nav-tabs">
-              <NavLink to="/" className="nav-tab" end>
-                Talk
-              </NavLink>
-              <NavLink to="/warehouse" className="nav-tab">
-                Warehouse
-              </NavLink>
-              <NavLink to="/chess" className="nav-tab">
-                Chess
-              </NavLink>
-            </nav>
+            <div className="header-actions">
+              <nav className="nav-tabs">
+                <NavLink to="/" className="nav-tab" end>
+                  Talk
+                </NavLink>
+                <NavLink to="/warehouse" className="nav-tab">
+                  Warehouse
+                </NavLink>
+                <NavLink to="/chess" className="nav-tab">
+                  Chess
+                </NavLink>
+              </nav>
+              <div className="auth-nav">
+                {isAuthenticated ? (
+                  <>
+                    <span className="auth-email" title={currentUser?.email}>{currentUser?.email}</span>
+                    <button type="button" className="auth-btn" onClick={logout}>Log out</button>
+                  </>
+                ) : (
+                  <>
+                    <Link to="/login" className="auth-link">Log in</Link>
+                    <Link to="/signup" className="auth-link auth-link-primary">Sign up</Link>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
         </header>
 

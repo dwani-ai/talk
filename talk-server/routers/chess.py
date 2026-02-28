@@ -2,17 +2,17 @@ import os
 from typing import Any, Dict
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from config import LLM_TIMEOUT, logger
-from deps import limiter
+from deps import get_optional_user, limiter
 
 router = APIRouter(prefix="/v1/chess", tags=["Chess"])
 
 
 @router.get("/state", summary="Get chess game state")
 @limiter.limit("60/minute")
-async def get_chess_state(request: Request) -> Dict[str, Any]:
+async def get_chess_state(request: Request, __=Depends(get_optional_user)) -> Dict[str, Any]:
     agent_base = os.getenv("DWANI_AGENT_BASE_URL", "").rstrip("/")
     if not agent_base:
         from fastapi import HTTPException

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from config import TTS_TIMEOUT, logger
-from deps import limiter, require_api_key
+from deps import get_optional_user, limiter, require_api_key
 from models import ALLOWED_LANGUAGES, ALLOWED_AGENTS, ChatRequest, DEFAULT_AGENT_NAME
 from services import call_agent, call_llm, get_session_context, append_to_session, transcribe_audio
 
@@ -17,7 +17,12 @@ _MAX_SESSION_ID_LEN = 128
 
 @router.post("/chat", summary="Text chat")
 @limiter.limit("60/minute")
-async def chat(request: Request, payload: ChatRequest, _: None = Depends(require_api_key)) -> Dict[str, Any]:
+async def chat(
+    request: Request,
+    payload: ChatRequest,
+    _: None = Depends(require_api_key),
+    __ = Depends(get_optional_user),
+) -> Dict[str, Any]:
     text = (payload.text or "").strip()
     request_id = getattr(request.state, "request_id", None)
     if not text:
@@ -67,6 +72,7 @@ async def chat(request: Request, payload: ChatRequest, _: None = Depends(require
 async def speech_to_speech(
     request: Request,
     _: None = Depends(require_api_key),
+    __ = Depends(get_optional_user),
     file: UploadFile = File(..., description="Audio file to process"),
     language: str = Query(..., description="Language of the audio (e.g. kannada, hindi, tamil, malayalam, telugu, marathi, english, german)"),
     mode: str = Query("llm", description="Processing mode: 'llm' or 'agent'"),

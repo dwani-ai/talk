@@ -1,9 +1,10 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
-import { NavLink } from 'react-router-dom'
+import { Link, NavLink } from 'react-router-dom'
 import { sendChatRequest, sendSpeechRequest } from './lib/apiClient'
 import { base64ToBlob } from './lib/audio'
 import { createSessionId, getOrCreateSessionId, loadConversations, saveConversations, setSessionId as persistSessionId } from './lib/session'
 import { useAudioRecorder } from './hooks/useAudioRecorder'
+import { useAuth } from './contexts/AuthContext'
 
 
 const LANGUAGES = [
@@ -20,6 +21,7 @@ const LANGUAGES = [
 const API_KEY = import.meta.env.VITE_API_KEY || ''
 
 export default function App() {
+  const { currentUser, isAuthenticated, logout } = useAuth()
   const [language, setLanguage] = useState('kannada')
   const [mode, setMode] = useState('agent') // 'llm' or 'agent'
   const [agentName, setAgentName] = useState('orchestrator')
@@ -345,24 +347,39 @@ export default function App() {
 
         <header>
           <div className="header-main">
-            <div>
+            <div className="header-brand">
               <h1>dwani.ai</h1>
               <p className="tagline">
                 Conversational AI Agents for Indian languages <br />
               </p>
               <p className="tagline">Push to talk · ASR → {mode === 'agent' ? 'Agent' : 'LLM'} → TTS</p>
             </div>
-            <nav className="nav-tabs">
-              <NavLink to="/" className="nav-tab" end>
-                Talk
-              </NavLink>
-              <NavLink to="/warehouse" className="nav-tab">
-                Warehouse
-              </NavLink>
-              <NavLink to="/chess" className="nav-tab">
-                Chess
-              </NavLink>
-            </nav>
+            <div className="header-actions">
+              <nav className="nav-tabs">
+                <NavLink to="/" className="nav-tab" end>
+                  Talk
+                </NavLink>
+                <NavLink to="/warehouse" className="nav-tab">
+                  Warehouse
+                </NavLink>
+                <NavLink to="/chess" className="nav-tab">
+                  Chess
+                </NavLink>
+              </nav>
+              <div className="auth-nav">
+                {isAuthenticated ? (
+                  <>
+                    <span className="auth-email" title={currentUser?.email}>{currentUser?.email}</span>
+                    <button type="button" className="auth-btn" onClick={logout}>Log out</button>
+                  </>
+                ) : (
+                  <>
+                    <Link to="/login" className="auth-link">Log in</Link>
+                    <Link to="/signup" className="auth-link auth-link-primary">Sign up</Link>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
         </header>
 
