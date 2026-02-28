@@ -16,6 +16,8 @@ if _WAREHOUSE_DIR not in sys.path:
 
 from state_store import (  # type: ignore[import-not-found]
     get_state,
+    get_warehouse_bounds,
+    is_within_bounds,
     update_robot_position,
     update_robot_status,
     upsert_item,
@@ -62,20 +64,62 @@ def _get_ugv_pose() -> Tuple[float, float, float]:
     return 5.0, 0.0, 5.0
 
 
+def _get_item_held_by(item_id: str) -> Optional[str]:
+    """Return robot_id if any robot is carrying/holding this item, else None."""
+    state = get_state()
+    for r in state.get("robots", []):
+        task = r.get("current_task") or ""
+        carried = None
+        if task.startswith("carrying_"):
+            carried = task.replace("carrying_", "").strip()
+        elif task.startswith("holding_"):
+            carried = task.replace("holding_", "").strip()
+        if carried == item_id:
+            return r.get("id")
+    return None
+
+
+def _get_carried_item() -> Optional[str]:
+    """Return item_id if UGV is carrying an item, else None."""
+    state = get_state()
+    for r in state.get("robots", []):
+        if r.get("id") == "ugv-1":
+            task = r.get("current_task") or ""
+            if task.startswith("carrying_"):
+                return task.replace("carrying_", "").strip()
+    return None
+
+
 def move_to(tool_context: ToolContext, x: float, z: float) -> Dict[str, Any]:
-    """Move the UGV on the ground plane to (x, 0, z)."""
+    """Move the UGV on the ground plane to (x, 0, z). Carried item moves with it."""
+    if not is_within_bounds(x, 0.0, z):
+        w, d, _ = get_warehouse_bounds()
+        return {"error": f"Position ({x}, {z}) is outside warehouse bounds (0–{w} x 0–{d})."}
     robot = update_robot_position("ugv-1", x, 0.0, z)
-    update_robot_status("ugv-1", "moving", current_task=f"driving_to_{x:.1f}_{z:.1f}")
+    carried = _get_carried_item()
+    if carried:
+        upsert_item(carried, (x, 0.0, z), stack_id=None)
+        update_robot_status("ugv-1", "working", current_task=f"carrying_{carried}")
+    else:
+        update_robot_status("ugv-1", "moving", current_task=f"driving_to_{x:.1f}_{z:.1f}")
     return {"ugv": robot}
 
 
 def pick_item(tool_context: ToolContext, item_id: str) -> Dict[str, Any]:
     """Pick an item so that it moves with the UGV."""
+    carried = _get_carried_item()
+    if carried:
+        return {"error": f"UGV is already carrying '{carried}'. Drop it first before picking another."}
     state = get_state()
     items: List[Dict[str, Any]] = state.get("items", [])
     item = next((it for it in items if it.get("id") == item_id), None)
     if item is None:
         return {"error": f"Item '{item_id}' not found."}
+    if item.get("stack_id"):
+        return {"error": f"Item '{item_id}' is on a stack. Use arm to pick from stack."}
+    held_by = _get_item_held_by(item_id)
+    if held_by:
+        return {"error": f"Item '{item_id}' is already held by {held_by}. It must be released first."}
 
     x, _, z = _get_ugv_pose()
     updated_item = upsert_item(item_id, (x, 0.0, z), stack_id=None)
@@ -85,6 +129,14 @@ def pick_item(tool_context: ToolContext, item_id: str) -> Dict[str, Any]:
 
 def drop_item(tool_context: ToolContext, item_id: str, x: float, z: float) -> Dict[str, Any]:
     """Drop the carried item at a new ground position."""
+    carried = _get_carried_item()
+    if carried != item_id:
+        return {
+            "error": f"UGV is not carrying '{item_id}'." + (f" (Currently carrying '{carried}')" if carried else ""),
+        }
+    if not is_within_bounds(x, 0.0, z):
+        w, d, _ = get_warehouse_bounds()
+        return {"error": f"Drop position ({x}, {z}) is outside warehouse bounds (0–{w} x 0–{d})."}
     updated_item = upsert_item(item_id, (x, 0.0, z), stack_id=None)
     update_robot_status("ugv-1", "idle", current_task=None)
     return {"dropped_item": updated_item}

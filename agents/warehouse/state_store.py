@@ -159,3 +159,19 @@ def reset_state() -> None:
     """Reset to the default demo state."""
     _init_default_state()
 
+
+def get_warehouse_bounds() -> Tuple[float, float, float]:
+    """Return (width, depth, height) of the warehouse."""
+    wh = _state.get("warehouse", {})
+    return (
+        float(wh.get("width", 50.0)),
+        float(wh.get("depth", 30.0)),
+        float(wh.get("height", 10.0)),
+    )
+
+
+def is_within_bounds(x: float, y: float, z: float) -> bool:
+    """Check if a point is within warehouse bounds."""
+    w, d, h = get_warehouse_bounds()
+    return 0 <= x <= w and 0 <= z <= d and 0 <= y <= h
+

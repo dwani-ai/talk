@@ -111,15 +111,66 @@ export default function WarehouseView() {
 
   const trySendWarehouseCommand = useCallback(
     async (text) => {
-      const lower = text.toLowerCase()
-      const moveMatch = lower.match(/^move\s+(uav|ugv|arm)\b/)
-      if (!moveMatch) return false
-      const robot = moveMatch[1]
+      const lower = text.toLowerCase().trim()
+      let payload = null
+
+      const normStack = (s) => (s.startsWith('stack') ? s : `stack-${s}`)
+
+      // --- Move (direction) ---
       const dirMatch = lower.match(/\b(north|south|east|west)\b/)
-      const payload = {
-        robot,
-        direction: dirMatch ? dirMatch[1] : null,
+      const moveRobotFirst = lower.match(/^(uav|ugv|arm)\s+(?:move\s+)?(?:to\s+)?(?:the\s+)?(north|south|east|west)\b/)
+      const moveVerbFirst = lower.match(/^move\s+(?:the\s+)?(uav|ugv|arm)\b.*\b(north|south|east|west)\b/)
+      if (dirMatch) {
+        if (moveRobotFirst) {
+          payload = { robot: moveRobotFirst[1], action: 'move', direction: moveRobotFirst[2] }
+        } else if (moveVerbFirst) {
+          payload = { robot: moveVerbFirst[1], action: 'move', direction: moveVerbFirst[2] }
+        }
       }
+
+      // --- Move (absolute coords): ugv 10 5 (x,z y=0) | ugv 10 0 5 (x,y,z) | move ugv to 10 5 ---
+      if (!payload) {
+        const abs3 = lower.match(/^(uav|ugv|arm)\s+(?:move\s+)?(?:to\s+)?([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s*$/)
+        const abs3Verb = lower.match(/^move\s+(?:the\s+)?(uav|ugv|arm)\s+(?:to\s+)?([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s*$/)
+        const abs2 = lower.match(/^(uav|ugv|arm)\s+(?:move\s+)?(?:to\s+)?([\d.-]+)\s+([\d.-]+)\s*$/)
+        const abs2Verb = lower.match(/^move\s+(?:the\s+)?(uav|ugv|arm)\s+(?:to\s+)?([\d.-]+)\s+([\d.-]+)\s*$/)
+        if (abs3 || abs3Verb) {
+          const m = abs3 || abs3Verb
+          payload = { robot: m[1], action: 'move', x: parseFloat(m[2]), y: parseFloat(m[3]), z: parseFloat(m[4]) }
+        } else if (abs2 || abs2Verb) {
+          const m = abs2 || abs2Verb
+          payload = { robot: m[1], action: 'move', x: parseFloat(m[2]), y: 0, z: parseFloat(m[3]) }
+        }
+      }
+
+      // --- Arm pick from stack (BEFORE pick - "pick from stack-1" is more specific) ---
+      if (!payload) {
+        const fromMatch = lower.match(/^(?:arm\s+)?pick\s+from\s+(stack-[\w.-]+|[\d\w.-]+)/)
+        const shortMatch = lower.match(/^(?:arm\s+)?pick\s+(stack-[\w.-]+)\b/)  // "pick stack-1" only, not "pick item-1"
+        const sid = fromMatch ? fromMatch[1] : shortMatch?.[1]
+        if (sid) payload = { robot: 'arm', action: 'pick_from_stack', stack_id: normStack(sid) }
+      }
+
+      // --- Arm place/put on stack ---
+      if (!payload && /^(arm\s+)?(?:place|put)\s+([\w.-]+)\s+(?:on\s+)?(stack-[\w.-]+|[\d\w.-]+)\b/.test(lower)) {
+        const m = lower.match(/^(?:arm\s+)?(?:place|put)\s+([\w.-]+)\s+(?:on\s+)?(stack-[\w.-]+|[\d\w.-]+)/)
+        if (m) payload = { robot: 'arm', action: 'place_on_stack', item_id: m[1], stack_id: normStack(m[2]) }
+      }
+
+      // --- UGV pick (after pick_from_stack so "pick from X" doesn't match) ---
+      if (!payload && /^(ugv\s+)?pick\s+([\w.-]+)\b/.test(lower)) {
+        const m = lower.match(/^(?:ugv\s+)?pick\s+([\w.-]+)/)
+        if (m) payload = { robot: 'ugv', action: 'pick', item_id: m[1] }
+      }
+
+      // --- UGV drop: at X Z or just X Z ---
+      if (!payload && /^(ugv\s+)?drop\s+([\w.-]+)\s+(?:at\s+)?([\d.-]+)\s+([\d.-]+)\b/.test(lower)) {
+        const m = lower.match(/^(?:ugv\s+)?drop\s+([\w.-]+)\s+(?:at\s+)?([\d.-]+)\s+([\d.-]+)/)
+        if (m) payload = { robot: 'ugv', action: 'drop', item_id: m[1], x: parseFloat(m[2]), z: parseFloat(m[3]) }
+      }
+
+      if (!payload) return false
+
       try {
         const res = await fetch(`${API_BASE}/v1/warehouse/command`, {
           method: 'POST',

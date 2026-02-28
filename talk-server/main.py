@@ -171,7 +171,10 @@ async def get_warehouse_state(request: Request) -> Dict[str, Any]:
 
 class WarehouseCommandRequest(BaseModel):
     robot: str = Field(..., description="Robot to control: 'uav', 'ugv', or 'arm'.")
+    action: str | None = Field(default=None, description="Action: move, pick, drop, pick_from_stack, place_on_stack.")
     direction: str | None = Field(default=None, description="Direction: north, south, east, or west.")
+    item_id: str | None = Field(default=None)
+    stack_id: str | None = Field(default=None)
     x: float | None = Field(default=None)
     y: float | None = Field(default=None)
     z: float | None = Field(default=None)

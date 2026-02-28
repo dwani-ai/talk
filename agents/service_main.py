@@ -15,6 +15,8 @@ from google.genai import types
 
 from warehouse.state_store import (
     get_state as get_warehouse_state_snapshot,
+    get_warehouse_bounds,
+    is_within_bounds,
     update_robot_position,
     update_robot_status,
     upsert_item,
@@ -208,6 +210,63 @@ def get_warehouse_state() -> Dict[str, Any]:
     return snapshot
 
 
+def _get_robot_position(state: Dict[str, Any], robot_id: str) -> tuple[float, float, float]:
+    robots = state.get("robots", [])
+    r = next((x for x in robots if x.get("id") == robot_id), None) or {}
+    pos = r.get("position") or [0.0, 0.0, 0.0]
+    return float(pos[0]), float(pos[1]), float(pos[2])
+
+
+def _get_item_position(state: Dict[str, Any], item_id: str) -> tuple[float, float, float] | None:
+    items = state.get("items", [])
+    it = next((x for x in items if x.get("id") == item_id), None)
+    if not it:
+        return None
+    pos = it.get("position") or [0.0, 0.0, 0.0]
+    return float(pos[0]), float(pos[1]), float(pos[2])
+
+
+def _stack_height(state: Dict[str, Any], stack_id: str) -> int:
+    items = state.get("items", [])
+    return sum(1 for it in items if it.get("stack_id") == stack_id)
+
+
+def _get_robot_carried_item(state: Dict[str, Any], robot_id: str) -> str | None:
+    """Return item_id if robot is carrying/holding an item, else None."""
+    robots = state.get("robots", [])
+    r = next((x for x in robots if x.get("id") == robot_id), None) or {}
+    task = r.get("current_task") or ""
+    if task.startswith("carrying_"):
+        return task.replace("carrying_", "").strip()
+    if task.startswith("holding_"):
+        return task.replace("holding_", "").strip()
+    return None
+
+
+def _get_robot_holding_item(state: Dict[str, Any], item_id: str) -> str | None:
+    """Return robot_id if any robot is carrying/holding this item, else None."""
+    for r in state.get("robots", []):
+        task = r.get("current_task") or ""
+        carried = None
+        if task.startswith("carrying_"):
+            carried = task.replace("carrying_", "").strip()
+        elif task.startswith("holding_"):
+            carried = task.replace("holding_", "").strip()
+        if carried == item_id:
+            return r.get("id")
+    return None
+
+
+def _get_stack_base_position(state: Dict[str, Any], stack_id: str) -> tuple[float, float]:
+    """Return (x, z) base position for a stack. Uses first item or default for empty stack."""
+    items = state.get("items", [])
+    stack_items = [it for it in items if it.get("stack_id") == stack_id]
+    if stack_items:
+        pos = stack_items[0].get("position") or [25.0, 0.0, 10.0]
+        return float(pos[0]), float(pos[2])
+    return 25.0, 10.0
+
+
 @app.post("/v1/warehouse/command")
 def warehouse_command(cmd: WarehouseCommandRequest) -> Dict[str, Any]:
     """Deterministic warehouse command endpoint used by the UI.
@@ -222,48 +281,186 @@ def warehouse_command(cmd: WarehouseCommandRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="robot must be one of: uav, ugv, arm")
 
     state = get_warehouse_state_snapshot()
-    robots = state.get("robots", [])
-    current = next((r for r in robots if r.get("id") == robot_id), None) or {}
-    cx, cy, cz = (current.get("position") or [0.0, 0.0, 0.0])
-    cx, cy, cz = float(cx), float(cy), float(cz)
+    cx, cy, cz = _get_robot_position(state, robot_id)
+    reply: str
 
-    # Decide target position.
-    if cmd.x is not None and cmd.y is not None and cmd.z is not None:
-        tx, ty, tz = float(cmd.x), float(cmd.y), float(cmd.z)
-    elif cmd.direction:
-        direction = cmd.direction.strip().lower()
-        step = 5.0
-        dx = dz = 0.0
-        if direction == "north":
-            dz = -step
-        elif direction == "south":
-            dz = step
-        elif direction == "east":
-            dx = step
-        elif direction == "west":
-            dx = -step
-        # Simple ground / altitude handling.
-        if robot_key == "uav":
-            tx, ty, tz = cx + dx, 5.0, cz + dz
-        elif robot_key == "ugv":
-            tx, ty, tz = cx + dx, 0.0, cz + dz
-        else:  # arm
-            tx, ty, tz = cx + dx, cy, cz + dz
+    action = (cmd.action or "").strip().lower() or "move"
+
+    # --- UGV pick: UGV must move to item first, then pick ---
+    if action == "pick":
+        if robot_key != "ugv":
+            raise HTTPException(status_code=400, detail="Only UGV can pick items from the floor.")
+        if not cmd.item_id:
+            raise HTTPException(status_code=400, detail="item_id required for pick.")
+        carried = _get_robot_carried_item(state, robot_id)
+        if carried:
+            raise HTTPException(
+                status_code=400,
+                detail=f"UGV is already carrying '{carried}'. Drop it first before picking another item.",
+            )
+        item_id = cmd.item_id.strip()
+        items = state.get("items", [])
+        item = next((it for it in items if it.get("id") == item_id), None)
+        if not item:
+            raise HTTPException(status_code=404, detail=f"Item '{item_id}' not found.")
+        if item.get("stack_id"):
+            raise HTTPException(status_code=400, detail=f"Item '{item_id}' is on a stack. Use arm pick from stack.")
+        held_by = _get_robot_holding_item(state, item_id)
+        if held_by and held_by != robot_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Item '{item_id}' is already held by {held_by}. It must be released first.",
+            )
+        ix, iy, iz = _get_item_position(state, item_id) or (0.0, 0.0, 0.0)
+        # 1. Move UGV to item location
+        update_robot_position(robot_id, ix, 0.0, iz)
+        # 2. Pick: item attaches to UGV (same position)
+        upsert_item(item_id, (ix, 0.0, iz), stack_id=None)
+        update_robot_status(robot_id, "working", current_task=f"carrying_{item_id}")
+        reply = f"{robot_id} moved to [{ix}, 0, {iz}], picked {item_id}."
+
+    # --- UGV drop: UGV must move to drop location first, then drop ---
+    elif action == "drop":
+        if robot_key != "ugv":
+            raise HTTPException(status_code=400, detail="Only UGV can drop items.")
+        if not cmd.item_id:
+            raise HTTPException(status_code=400, detail="item_id required for drop.")
+        if cmd.x is None or cmd.z is None:
+            raise HTTPException(status_code=400, detail="x and z required for drop.")
+        carried = _get_robot_carried_item(state, robot_id)
+        item_id = cmd.item_id.strip()
+        if carried != item_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"UGV is not carrying '{item_id}'." + (f" (Currently carrying '{carried}')" if carried else ""),
+            )
+        tx, tz = float(cmd.x), float(cmd.z)
+        if not is_within_bounds(tx, 0.0, tz):
+            w, d, _ = get_warehouse_bounds()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Drop position ({tx}, {tz}) is outside warehouse bounds (0–{w} x 0–{d}).",
+            )
+        # 1. Move UGV to drop location
+        update_robot_position(robot_id, tx, 0.0, tz)
+        # 2. Drop: item placed at UGV position
+        upsert_item(item_id, (tx, 0.0, tz), stack_id=None)
+        update_robot_status(robot_id, "idle", current_task=None)
+        reply = f"{robot_id} moved to [{tx}, 0, {tz}], dropped {item_id}."
+
+    # --- Arm pick_from_stack: arm must move to stack top first, then pick ---
+    elif action == "pick_from_stack":
+        if robot_key != "arm":
+            raise HTTPException(status_code=400, detail="Only arm can pick from stack.")
+        if not cmd.stack_id:
+            raise HTTPException(status_code=400, detail="stack_id required for pick_from_stack.")
+        holding = _get_robot_carried_item(state, robot_id)
+        if holding:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Arm is already holding '{holding}'. Place it on a stack first before picking another.",
+            )
+        stack_id = cmd.stack_id.strip()
+        items = state.get("items", [])
+        stack_items = [it for it in items if it.get("stack_id") == stack_id]
+        if not stack_items:
+            raise HTTPException(status_code=404, detail=f"No items in stack '{stack_id}'.")
+        top = stack_items[-1]
+        item_id = str(top.get("id"))
+        ix, iy, iz = top.get("position") or [25.0, 0.0, 10.0]
+        ix, iy, iz = float(ix), float(iy), float(iz)
+        # 1. Move arm to stack top (item location)
+        update_robot_position(robot_id, ix, iy, iz)
+        # 2. Pick: item attaches to arm (same position)
+        upsert_item(item_id, (ix, iy, iz), stack_id=None)
+        update_robot_status(robot_id, "working", current_task=f"holding_{item_id}")
+        reply = f"{robot_id} moved to [{ix}, {iy}, {iz}], picked {item_id} from {stack_id}."
+
+    # --- Arm place_on_stack: arm must move to place height first, then place ---
+    elif action == "place_on_stack":
+        if robot_key != "arm":
+            raise HTTPException(status_code=400, detail="Only arm can place on stack.")
+        if not cmd.stack_id or not cmd.item_id:
+            raise HTTPException(status_code=400, detail="stack_id and item_id required for place_on_stack.")
+        holding = _get_robot_carried_item(state, robot_id)
+        item_id = cmd.item_id.strip()
+        if holding != item_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Arm is not holding '{item_id}'." + (f" (Currently holding '{holding}')" if holding else ""),
+            )
+        stack_id = cmd.stack_id.strip()
+        level = _stack_height(state, stack_id)
+        base_x, base_z = _get_stack_base_position(state, stack_id)
+        y = 0.5 * (level + 1)
+        if not is_within_bounds(base_x, y, base_z):
+            w, d, h = get_warehouse_bounds()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Stack position ({base_x}, {y}, {base_z}) would be outside warehouse bounds.",
+            )
+        # 1. Move arm to place height
+        update_robot_position(robot_id, base_x, y, base_z)
+        # 2. Place: item on stack at arm position
+        upsert_item(item_id, (base_x, y, base_z), stack_id=stack_id)
+        update_robot_status(robot_id, "idle", current_task=None)
+        reply = f"{robot_id} moved to [{base_x}, {y}, {base_z}], placed {item_id} on {stack_id}."
+
+    # --- Move ---
     else:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide either absolute coordinates (x,y,z) or a direction.",
-        )
+        if cmd.x is not None and cmd.z is not None:
+            tx = float(cmd.x)
+            tz = float(cmd.z)
+            ty = float(cmd.y) if cmd.y is not None else (0.0 if robot_key == "ugv" else 5.0)
+        elif cmd.direction:
+            direction = cmd.direction.strip().lower()
+            step = 5.0
+            dx = dz = 0.0
+            if direction == "north":
+                dz = -step
+            elif direction == "south":
+                dz = step
+            elif direction == "east":
+                dx = step
+            elif direction == "west":
+                dx = -step
+            if robot_key == "uav":
+                tx, ty, tz = cx + dx, 5.0, cz + dz
+            elif robot_key == "ugv":
+                tx, ty, tz = cx + dx, 0.0, cz + dz
+            else:
+                tx, ty, tz = cx + dx, cy, cz + dz
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide direction or absolute coordinates (x,y,z) for move.",
+            )
+        if not is_within_bounds(tx, ty, tz):
+            w, d, h = get_warehouse_bounds()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Target position ({tx}, {ty}, {tz}) is outside warehouse bounds (0–{w} x 0–{d} x 0–{h}).",
+            )
+        updated = update_robot_position(robot_id, tx, ty, tz)
+        # If robot is carrying/holding an item, move the item with it
+        current = next((r for r in state.get("robots", []) if r.get("id") == robot_id), None) or {}
+        task = current.get("current_task") or ""
+        carried_id = None
+        if task.startswith("carrying_"):
+            carried_id = task.replace("carrying_", "").strip()
+        elif task.startswith("holding_"):
+            carried_id = task.replace("holding_", "").strip()
+        if carried_id:
+            if robot_key == "ugv":
+                upsert_item(carried_id, (tx, 0.0, tz), stack_id=None)
+            else:
+                upsert_item(carried_id, (tx, ty, tz), stack_id=None)
+            update_robot_status(robot_id, "working", current_task=task)
+        else:
+            update_robot_status(robot_id, "idle", current_task=None)
+        reply = f"{robot_id} moved to [{updated['position'][0]}, {updated['position'][1]}, {updated['position'][2]}]."
 
-    updated = update_robot_position(robot_id, tx, ty, tz)
-    update_robot_status(robot_id, "idle", current_task=None)
-
-    # Refresh snapshot for clients that want updated robots/items.
     new_state = get_warehouse_state_snapshot()
-    reply = (
-        f"{robot_id} moved to position "
-        f"[{updated['position'][0]}, {updated['position'][1]}, {updated['position'][2]}]."
-    )
     return {
         "reply": reply,
         "robots": new_state.get("robots", []),
