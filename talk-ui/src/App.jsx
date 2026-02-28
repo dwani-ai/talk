@@ -320,6 +320,9 @@ export default function App() {
               <Link to="/warehouse" className="nav-tab">
                 Warehouse
               </Link>
+              <Link to="/chess" className="nav-tab">
+                Chess
+              </Link>
             </nav>
           </div>
         </header>
@@ -352,6 +355,8 @@ export default function App() {
                       ? 'agent_fix_my_city'
                       : agentName === 'warehouse_orchestrator'
                         ? 'agent_warehouse'
+                        : agentName === 'chess_orchestrator'
+                          ? 'agent_chess'
                         : agentName === 'orchestrator'
                           ? 'agent_orchestrator'
                           : 'agent_travel'
@@ -376,6 +381,9 @@ export default function App() {
                 } else if (value === 'agent_warehouse') {
                   setMode('agent')
                   setAgentName('warehouse_orchestrator')
+                } else if (value === 'agent_chess') {
+                  setMode('agent')
+                  setAgentName('chess_orchestrator')
                 }
               }}
               disabled={status !== 'idle'}
@@ -386,6 +394,7 @@ export default function App() {
               <option value="agent_fix_my_city">Fix my city agent</option>
               <option value="agent_orchestrator">All-in-one assistant</option>
               <option value="agent_warehouse">Warehouse robots (UAV / UGV / Arm)</option>
+              <option value="agent_chess">Chess orchestrator</option>
             </select>
           </label>
 

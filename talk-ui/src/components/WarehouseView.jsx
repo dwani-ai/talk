@@ -188,6 +188,9 @@ export default function WarehouseView() {
               <Link to="/warehouse" className="nav-tab">
                 Warehouse
               </Link>
+              <Link to="/chess" className="nav-tab">
+                Chess
+              </Link>
             </nav>
           </div>
         </header>

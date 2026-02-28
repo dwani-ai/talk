@@ -92,6 +92,8 @@ Currently there are four agents:
 - **Viva/voce examiner** – single-agent viva/oral-exam examiner that scores each answer and gives feedback.
 - **Fix my city agent** – register city complaints (city, area, date, time, type, description) and check status of previous complaints; complaints are stored durably in SQLite.
 - **Orchestrator agent** – a smart router that looks at each user turn and delegates it to the travel planner, viva examiner, or fix-my-city agent as appropriate.
+- **Warehouse orchestrator** – controls UAV/UGV/Arm robots and returns verified `warehouse_state` for the 3D view.
+- **Chess orchestrator** – runs chess commands with deterministic rules and returns verified `chess_state` for the board.
 
 When you pick **“Travel planner agent”** in the UI:
 
@@ -124,6 +126,27 @@ How it runs:
 - **Production integrated stack**: `compose-integrated.yml` adds an `agents` service wired to the internal `vllm-server` and exposes it to the backend via `DWANI_AGENT_BASE_URL`.
 
 For more details about the ADK setup and local agent experiments, see [`agents/README.md`](agents/README.md).
+
+---
+
+## Chess tab (agent-driven)
+
+Talk includes a dedicated **Chess** tab using the same end-to-end pattern as Warehouse:
+
+- UI sends chat commands to `/v1/chat` with `agent_name: "chess_orchestrator"`.
+- Agents service executes deterministic chess commands and returns `chess_state`.
+- UI applies `chess_state` immediately and also polls `/v1/chess/state` as a fallback.
+
+### Supported v1 commands
+
+- `new game`
+- `new game human vs ai as white`
+- `new game human vs human`
+- `e2 to e4` (also `e2e4`)
+- `ai move`
+- `show board state`
+
+Core movement/capture/turn-order rules are enforced deterministically. Advanced rules (check/checkmate/stalemate/castling/en-passant) are deferred.
 
 ---
 

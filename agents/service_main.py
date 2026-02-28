@@ -16,6 +16,7 @@ from google.genai import types
 from warehouse.state_store import get_state as get_warehouse_state_snapshot
 from warehouse.commands import execute_warehouse_command, verify_warehouse_state_after_command
 from warehouse.direct_commands import parse_direct_warehouse_command
+from chess.state_store import get_state as get_chess_state_snapshot
 
 # Ensure we can import the travel-planner and viva-examiner agent modules
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -93,6 +94,23 @@ try:
 except Exception as exc:  # pragma: no cover - import-time failure logging
     raise RuntimeError(f"Failed to import warehouse orchestrator agent: {exc}") from exc
 
+CHESS_AGENT_DIR = os.path.join(CURRENT_DIR, "chess")
+CHESS_AGENT_PATH = os.path.join(CHESS_AGENT_DIR, "orchestrator_agent.py")
+
+try:
+    chess_spec = importlib_util.spec_from_file_location(
+        "chess_orchestrator_agent", CHESS_AGENT_PATH
+    )
+    if chess_spec is None or chess_spec.loader is None:
+        raise RuntimeError("Could not load spec for chess orchestrator agent")
+    chess_module = importlib_util.module_from_spec(chess_spec)
+    chess_spec.loader.exec_module(chess_module)  # type: ignore[attr-defined]
+    root_chess_orchestrator_agent = getattr(
+        chess_module, "root_chess_orchestrator_agent"
+    )
+except Exception as exc:  # pragma: no cover - import-time failure logging
+    raise RuntimeError(f"Failed to import chess orchestrator agent: {exc}") from exc
+
 
 logger = logging.getLogger("agents_service")
 logging.basicConfig(level=logging.INFO)
@@ -112,6 +130,10 @@ class ChatResponse(BaseModel):
     warehouse_state: Dict[str, Any] | None = Field(
         default=None,
         description="Verified warehouse state (robots, items, warehouse) when agent is warehouse_orchestrator; use to update 3D view.",
+    )
+    chess_state: Dict[str, Any] | None = Field(
+        default=None,
+        description="Chess board state when agent is chess_orchestrator; use to update board view.",
     )
 
 
@@ -177,6 +199,12 @@ _agents: Dict[str, Runner] = {
         app_name=APP_NAME,
         session_service=_session_service,
     ),
+    # Chess orchestrator for game commands and AI moves.
+    "chess_orchestrator": Runner(
+        agent=root_chess_orchestrator_agent,
+        app_name=APP_NAME,
+        session_service=_session_service,
+    ),
 }
 
 
@@ -206,6 +234,15 @@ def get_warehouse_state() -> Dict[str, Any]:
     snapshot = get_warehouse_state_snapshot()
     if not isinstance(snapshot, dict):
         raise HTTPException(status_code=500, detail="Invalid warehouse state")
+    return snapshot
+
+
+@app.get("/v1/chess/state")
+def get_chess_state() -> Dict[str, Any]:
+    """Return current chess board and game metadata."""
+    snapshot = get_chess_state_snapshot()
+    if not isinstance(snapshot, dict):
+        raise HTTPException(status_code=500, detail="Invalid chess state")
     return snapshot
 
 
@@ -276,6 +313,7 @@ def _run_agent_message(runner: Runner, user_id: str, session_id: str, message: s
 
     reply_text = " ".join(" ".join(final_text_parts).split())
     warehouse_state = None
+    chess_state = None
     if agent_name == "warehouse_orchestrator":
         warehouse_state = get_warehouse_state_snapshot()
         if not isinstance(warehouse_state, dict):
@@ -322,7 +360,11 @@ def _run_agent_message(runner: Runner, user_id: str, session_id: str, message: s
                         f"Command not verified against warehouse state: {reason}. "
                         "No confirmed state change was applied."
                     )
-    return ChatResponse(reply=reply_text, state=last_state, warehouse_state=warehouse_state)
+    if agent_name == "chess_orchestrator":
+        chess_state = get_chess_state_snapshot()
+        if not isinstance(chess_state, dict):
+            chess_state = None
+    return ChatResponse(reply=reply_text, state=last_state, warehouse_state=warehouse_state, chess_state=chess_state)
 
 
 @app.post("/v1/agents/{agent_name}/chat", response_model=ChatResponse)

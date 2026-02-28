@@ -86,6 +86,8 @@ app = FastAPI(
         {"name": "Chat", "description": "Chat-related endpoints"},
         {"name": "Audio", "description": "Audio processing and TTS endpoints"},
         {"name": "Translation", "description": "Text translation endpoints"},
+        {"name": "Warehouse", "description": "Warehouse simulation endpoints"},
+        {"name": "Chess", "description": "Chess gameplay endpoints"},
     ],
 )
 app.state.limiter = limiter
@@ -166,6 +168,34 @@ async def get_warehouse_state(request: Request) -> Dict[str, Any]:
     data = resp.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=502, detail="Warehouse state service returned invalid data")
+    return data
+
+
+@app.get(
+    "/v1/chess/state",
+    summary="Get chess game state",
+    description="Proxy endpoint that returns the current chess board, turn, mode, and move history.",
+    tags=["Chess"],
+)
+@limiter.limit("60/minute")
+async def get_chess_state(request: Request) -> Dict[str, Any]:
+    """Fetch chess state from the agents service."""
+    agent_base = os.getenv("DWANI_AGENT_BASE_URL", "").rstrip("/")
+    if not agent_base:
+        raise HTTPException(status_code=502, detail="Agent service base URL is not configured")
+    url = f"{agent_base}/v1/chess/state"
+    try:
+        async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+            resp = await client.get(url)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error(f"Chess state request failed: {exc}")
+        raise HTTPException(status_code=502, detail="Failed to reach chess state service") from exc
+    if resp.status_code != 200:
+        logger.error(f"Chess state service returned {resp.status_code}: {resp.text}")
+        raise HTTPException(status_code=502, detail="Chess state service returned an error")
+    data = resp.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="Chess state service returned invalid data")
     return data
 
 
@@ -388,7 +418,7 @@ async def call_llm(user_text: str, context: Optional[List[Dict[str, str]]] = Non
 
 
 async def call_agent(agent_name: str, user_text: str, session_id: Optional[str]) -> Dict[str, Any]:
-    """Send text to the agents service for a named agent. Returns dict with 'reply' and optionally 'warehouse_state' (for warehouse_orchestrator)."""
+    """Send text to agents service. Returns reply and optional state payloads."""
     if not AGENT_BASE_URL:
         raise HTTPException(status_code=502, detail="Agent service base URL is not configured")
     if not session_id:
@@ -417,6 +447,8 @@ async def call_agent(agent_name: str, user_text: str, session_id: Optional[str])
     result: Dict[str, Any] = {"reply": " ".join(str(reply).strip().split())}
     if data.get("warehouse_state") is not None and isinstance(data["warehouse_state"], dict):
         result["warehouse_state"] = data["warehouse_state"]
+    if data.get("chess_state") is not None and isinstance(data["chess_state"], dict):
+        result["chess_state"] = data["chess_state"]
     return result
 
 
@@ -458,6 +490,8 @@ async def chat(request: Request, payload: ChatRequest) -> Dict[str, Any]:
         out: Dict[str, Any] = {"user": text, "reply": reply}
         if agent_result.get("warehouse_state") is not None:
             out["warehouse_state"] = agent_result["warehouse_state"]
+        if agent_result.get("chess_state") is not None:
+            out["chess_state"] = agent_result["chess_state"]
         if session_id:
             _append_to_session(session_id, text, reply)
         return out
