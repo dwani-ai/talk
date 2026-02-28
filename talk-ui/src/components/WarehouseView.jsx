@@ -109,98 +109,6 @@ export default function WarehouseView() {
     }
   }, [fetchState])
 
-  const trySendWarehouseCommand = useCallback(
-    async (text) => {
-      const lower = text.toLowerCase().trim()
-      let payload = null
-
-      const normStack = (s) => (s.startsWith('stack') ? s : `stack-${s}`)
-
-      // --- Move (direction) ---
-      const dirMatch = lower.match(/\b(north|south|east|west)\b/)
-      const moveRobotFirst = lower.match(/^(uav|ugv|arm)\s+(?:move\s+)?(?:to\s+)?(?:the\s+)?(north|south|east|west)\b/)
-      const moveVerbFirst = lower.match(/^move\s+(?:the\s+)?(uav|ugv|arm)\b.*\b(north|south|east|west)\b/)
-      if (dirMatch) {
-        if (moveRobotFirst) {
-          payload = { robot: moveRobotFirst[1], action: 'move', direction: moveRobotFirst[2] }
-        } else if (moveVerbFirst) {
-          payload = { robot: moveVerbFirst[1], action: 'move', direction: moveVerbFirst[2] }
-        }
-      }
-
-      // --- Move (absolute coords): ugv 10 5 (x,z y=0) | ugv 10 0 5 (x,y,z) | move ugv to 10 5 ---
-      if (!payload) {
-        const abs3 = lower.match(/^(uav|ugv|arm)\s+(?:move\s+)?(?:to\s+)?([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s*$/)
-        const abs3Verb = lower.match(/^move\s+(?:the\s+)?(uav|ugv|arm)\s+(?:to\s+)?([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s*$/)
-        const abs2 = lower.match(/^(uav|ugv|arm)\s+(?:move\s+)?(?:to\s+)?([\d.-]+)\s+([\d.-]+)\s*$/)
-        const abs2Verb = lower.match(/^move\s+(?:the\s+)?(uav|ugv|arm)\s+(?:to\s+)?([\d.-]+)\s+([\d.-]+)\s*$/)
-        if (abs3 || abs3Verb) {
-          const m = abs3 || abs3Verb
-          payload = { robot: m[1], action: 'move', x: parseFloat(m[2]), y: parseFloat(m[3]), z: parseFloat(m[4]) }
-        } else if (abs2 || abs2Verb) {
-          const m = abs2 || abs2Verb
-          payload = { robot: m[1], action: 'move', x: parseFloat(m[2]), y: 0, z: parseFloat(m[3]) }
-        }
-      }
-
-      // --- Arm pick from stack (BEFORE pick - "pick from stack-1" is more specific) ---
-      if (!payload) {
-        const fromMatch = lower.match(/^(?:arm\s+)?pick\s+from\s+(stack-[\w.-]+|[\d\w.-]+)/)
-        const shortMatch = lower.match(/^(?:arm\s+)?pick\s+(stack-[\w.-]+)\b/)  // "pick stack-1" only, not "pick item-1"
-        const sid = fromMatch ? fromMatch[1] : shortMatch?.[1]
-        if (sid) payload = { robot: 'arm', action: 'pick_from_stack', stack_id: normStack(sid) }
-      }
-
-      // --- Arm place/put on stack ---
-      if (!payload && /^(arm\s+)?(?:place|put)\s+([\w.-]+)\s+(?:on\s+)?(stack-[\w.-]+|[\d\w.-]+)\b/.test(lower)) {
-        const m = lower.match(/^(?:arm\s+)?(?:place|put)\s+([\w.-]+)\s+(?:on\s+)?(stack-[\w.-]+|[\d\w.-]+)/)
-        if (m) payload = { robot: 'arm', action: 'place_on_stack', item_id: m[1], stack_id: normStack(m[2]) }
-      }
-
-      // --- UGV pick (after pick_from_stack so "pick from X" doesn't match) ---
-      if (!payload && /^(ugv\s+)?pick\s+([\w.-]+)\b/.test(lower)) {
-        const m = lower.match(/^(?:ugv\s+)?pick\s+([\w.-]+)/)
-        if (m) payload = { robot: 'ugv', action: 'pick', item_id: m[1] }
-      }
-
-      // --- UGV drop: at X Z or just X Z ---
-      if (!payload && /^(ugv\s+)?drop\s+([\w.-]+)\s+(?:at\s+)?([\d.-]+)\s+([\d.-]+)\b/.test(lower)) {
-        const m = lower.match(/^(?:ugv\s+)?drop\s+([\w.-]+)\s+(?:at\s+)?([\d.-]+)\s+([\d.-]+)/)
-        if (m) payload = { robot: 'ugv', action: 'drop', item_id: m[1], x: parseFloat(m[2]), z: parseFloat(m[3]) }
-      }
-
-      if (!payload) return false
-
-      try {
-        const res = await fetch(`${API_BASE}/v1/warehouse/command`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}))
-          throw new Error(err.detail || `Server error ${res.status}`)
-        }
-        const data = await res.json()
-        const assistant = data.reply || 'Command applied.'
-        setChatLog((prev) => [
-          ...prev,
-          {
-            id: Date.now(),
-            user: text,
-            assistant,
-          },
-        ])
-        await fetchState()
-        return true
-      } catch (e) {
-        setError(e.message || 'Warehouse command failed')
-        return true
-      }
-    },
-    [fetchState]
-  )
-
   const sendCommand = useCallback(
     async (e) => {
       e.preventDefault()
@@ -211,36 +119,43 @@ export default function WarehouseView() {
       setError(null)
 
       try {
-        const handled = await trySendWarehouseCommand(text)
-        if (!handled) {
-          const payload = {
+        const res = await fetch(`${API_BASE}/v1/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Session-ID': sessionId,
+          },
+          body: JSON.stringify({
             text,
             mode: 'agent',
             agent_name: 'warehouse_orchestrator',
-          }
-          const res = await fetch(`${API_BASE}/v1/chat`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Session-ID': sessionId,
-            },
-            body: JSON.stringify(payload),
+          }),
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.detail || `Server error ${res.status}`)
+        }
+        const data = await res.json()
+        const assistant = data.reply || '(no response)'
+        setChatLog((prev) => [
+          ...prev,
+          {
+            id: Date.now(),
+            user: text,
+            assistant,
+          },
+        ])
+        // Apply verified warehouse state from response so 3D view updates immediately
+        if (data.warehouse_state && typeof data.warehouse_state === 'object') {
+          const ws = data.warehouse_state
+          setState({
+            warehouse: ws.warehouse ?? null,
+            robots: Array.isArray(ws.robots) ? ws.robots : [],
+            items: Array.isArray(ws.items) ? ws.items : [],
           })
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({}))
-            throw new Error(err.detail || `Server error ${res.status}`)
-          }
-          const data = await res.json()
-          const assistant = data.reply || '(no response)'
-          setChatLog((prev) => [
-            ...prev,
-            {
-              id: Date.now(),
-              user: text,
-              assistant,
-            },
-          ])
-          fetchState()
+        } else {
+          await fetchState()
+          setTimeout(fetchState, 400)
         }
         setCommand('')
         setChatStatus('idle')
@@ -249,7 +164,7 @@ export default function WarehouseView() {
         setChatStatus('idle')
       }
     },
-    [command, chatStatus, sessionId, fetchState, trySendWarehouseCommand]
+    [command, chatStatus, sessionId, fetchState]
   )
 
   const { warehouse, robots, items } = state
@@ -264,7 +179,7 @@ export default function WarehouseView() {
           <div className="header-main">
             <div>
               <h1>Warehouse robots</h1>
-              <p className="tagline">Live 3D view of UAV, UGV, and arm state.</p>
+              <p className="tagline">Live 3D view of UAV, UGV, and arm state. Commands (e.g. ugv pick item-1) run via the agent and update the view.</p>
             </div>
             <nav className="nav-tabs">
               <Link to="/" className="nav-tab">
@@ -319,7 +234,7 @@ export default function WarehouseView() {
               <h2>Command robots</h2>
               <textarea
                 rows={2}
-                placeholder="Type a command for the warehouse robots…"
+                placeholder="Tell the warehouse agent what to do (e.g. move ugv north, pick item-1, move towards arm)…"
                 value={command}
                 onChange={(e) => setCommand(e.target.value)}
                 disabled={chatStatus === 'sending'}

@@ -1,7 +1,7 @@
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from dotenv import load_dotenv
 
@@ -14,14 +14,8 @@ _WAREHOUSE_DIR = os.path.dirname(os.path.abspath(__file__))
 if _WAREHOUSE_DIR not in sys.path:
     sys.path.insert(0, _WAREHOUSE_DIR)
 
-from state_store import (  # type: ignore[import-not-found]
-    get_state,
-    get_warehouse_bounds,
-    is_within_bounds,
-    update_robot_position,
-    update_robot_status,
-    upsert_item,
-)
+from state_store import get_state  # type: ignore[import-not-found]
+from commands import execute_warehouse_command  # type: ignore[import-not-found]
 
 
 load_dotenv()
@@ -40,18 +34,21 @@ MODEL = LiteLlm(
 UGV_INSTRUCTION = """
 You control a UGV (ground robot) that moves items around the warehouse floor.
 
-- Always answer in the same language as the user.
-- Keep replies short and easy for TTS.
+Response rule — no hallucination: You MUST respond ONLY from the last tool result.
+- If the tool returned success=True and verified_fact: output exactly that verified_fact (or one short sentence paraphrase in the user's language). Do not add positions or outcomes not in the tool output.
+- If the tool returned success=False or an error: output only that the action failed and the error message. Do not claim success.
+You MUST call a tool before any claim about movement, pick, or drop. Never say the UGV moved, picked, or dropped without having just called the corresponding tool and using only its verified_fact or error.
 
-Capabilities via tools:
-- move_to(x, z): drive the UGV on the ground plane (y is always 0).
-- pick_item(item_id): pick up an item so that it moves with the robot.
-- drop_item(item_id, x, z): place the carried item at a ground position.
-- get_nearby_items(radius): list items within a radius of the robot.
+Tools:
+- get_robots_positions(): positions of all robots (for planning).
+- move_towards_robot(robot_id): one step toward arm-1 or uav-1, stopping short. Use for "move towards arm". Call repeatedly to get closer.
+- move_direction(direction): move 5 units north/south/east/west.
+- move_to(x, z): drive to (x, z) on the ground. Carried item moves with UGV.
+- pick_item(item_id): pick up item. Uses deterministic API.
+- drop_item(item_id, x, z): drop carried item at (x, z).
+- get_nearby_items(radius): items within radius of UGV.
 
-You MUST use these tools to change positions or move items; do not pretend you moved without calling a tool.
-Never say the UGV moved, picked, or dropped anything unless you have just called the corresponding tool
-and you base your answer on its returned position or item data.
+Always answer in the same language as the user. Keep replies short and TTS-friendly.
 """
 
 
@@ -64,86 +61,98 @@ def _get_ugv_pose() -> Tuple[float, float, float]:
     return 5.0, 0.0, 5.0
 
 
-def _get_item_held_by(item_id: str) -> Optional[str]:
-    """Return robot_id if any robot is carrying/holding this item, else None."""
-    state = get_state()
-    for r in state.get("robots", []):
-        task = r.get("current_task") or ""
-        carried = None
-        if task.startswith("carrying_"):
-            carried = task.replace("carrying_", "").strip()
-        elif task.startswith("holding_"):
-            carried = task.replace("holding_", "").strip()
-        if carried == item_id:
-            return r.get("id")
-    return None
+STEP = 5.0
+MIN_DISTANCE_FROM_TARGET = 2.5  # stay at least this far from another robot when moving "towards" it
 
 
-def _get_carried_item() -> Optional[str]:
-    """Return item_id if UGV is carrying an item, else None."""
+def move_towards_robot(tool_context: ToolContext, robot_id: str) -> Dict[str, Any]:
+    """Move the UGV one step (5 units) toward the given robot (arm-1, uav-1, etc.), stopping short to avoid collision. Call repeatedly to get closer. Returns success, verified_fact (only sentence you may say), or error."""
+    robot_id = (robot_id or "").strip().lower()
+    if robot_id == "ugv-1" or robot_id == "ugv":
+        return {"success": False, "error": "Cannot move towards self. Specify arm-1 or uav-1.", "verified_fact": "Cannot move towards self. Specify arm-1 or uav-1."}
+    if robot_id in ("arm", "arm-1"):
+        robot_id = "arm-1"
+    elif robot_id in ("uav", "uav-1"):
+        robot_id = "uav-1"
     state = get_state()
-    for r in state.get("robots", []):
-        if r.get("id") == "ugv-1":
-            task = r.get("current_task") or ""
-            if task.startswith("carrying_"):
-                return task.replace("carrying_", "").strip()
-    return None
+    target_r = next((r for r in state.get("robots", []) if r.get("id") == robot_id), None)
+    if not target_r:
+        return {"success": False, "error": f"Robot '{robot_id}' not found.", "verified_fact": f"Robot '{robot_id}' not found. Use arm-1 or uav-1."}
+    tx, ty, tz = target_r.get("position") or [0.0, 0.0, 0.0]
+    tx, tz = float(tx), float(tz)
+    cx, _, cz = _get_ugv_pose()
+    dx, dz = tx - cx, tz - cz
+    dist = (dx * dx + dz * dz) ** 0.5
+    robots = state.get("robots", [])
+    ugv_now = next((r for r in robots if r.get("id") == "ugv-1"), None)
+    if dist < 1e-6:
+        return {"success": True, "verified_fact": "Already at target position.", "ugv": ugv_now}
+    if dist <= MIN_DISTANCE_FROM_TARGET:
+        msg = f"Already within {MIN_DISTANCE_FROM_TARGET} units of {robot_id}. Safe distance maintained."
+        return {"success": True, "verified_fact": msg, "ugv": ugv_now}
+    ux, uz = dx / dist, dz / dist
+    step = min(STEP, dist - MIN_DISTANCE_FROM_TARGET)
+    if step < 0.5:
+        return {"success": True, "verified_fact": f"Already near {robot_id}. Safe distance maintained.", "ugv": ugv_now}
+    new_x, new_z = cx + ux * step, cz + uz * step
+    try:
+        out = execute_warehouse_command("ugv", "move", x=new_x, y=0.0, z=new_z)
+        ugv = next((r for r in out["robots"] if r.get("id") == "ugv-1"), None)
+        return {"success": True, "verified_fact": out["reply"], "ugv": ugv, "reply": out["reply"]}
+    except ValueError as e:
+        err = str(e)
+        return {"success": False, "error": err, "verified_fact": f"Failed: {err}"}
+
+
+def move_direction(tool_context: ToolContext, direction: str) -> Dict[str, Any]:
+    """Move the UGV 5 units in a direction: north (z-5), south (z+5), east (x+5), west (x-5). Returns success and verified_fact or error."""
+    direction = (direction or "").strip().lower()
+    if direction not in ("north", "south", "east", "west"):
+        return {"success": False, "error": f"Direction must be north, south, east, or west. Got: {direction}", "verified_fact": f"Direction must be north, south, east, or west. Got: {direction}"}
+    try:
+        out = execute_warehouse_command("ugv", "move", direction=direction)
+        ugv = next((r for r in out["robots"] if r.get("id") == "ugv-1"), None)
+        return {"success": True, "verified_fact": out["reply"], "ugv": ugv, "reply": out["reply"]}
+    except ValueError as e:
+        err = str(e)
+        return {"success": False, "error": err, "verified_fact": f"Failed: {err}"}
 
 
 def move_to(tool_context: ToolContext, x: float, z: float) -> Dict[str, Any]:
-    """Move the UGV on the ground plane to (x, 0, z). Carried item moves with it."""
-    if not is_within_bounds(x, 0.0, z):
-        w, d, _ = get_warehouse_bounds()
-        return {"error": f"Position ({x}, {z}) is outside warehouse bounds (0–{w} x 0–{d})."}
-    robot = update_robot_position("ugv-1", x, 0.0, z)
-    carried = _get_carried_item()
-    if carried:
-        upsert_item(carried, (x, 0.0, z), stack_id=None)
-        update_robot_status("ugv-1", "working", current_task=f"carrying_{carried}")
-    else:
-        update_robot_status("ugv-1", "moving", current_task=f"driving_to_{x:.1f}_{z:.1f}")
-    return {"ugv": robot}
+    """Move the UGV on the ground plane to (x, 0, z). Carried item moves with it. Returns success, verified_fact, or error."""
+    try:
+        out = execute_warehouse_command("ugv", "move", x=x, y=0.0, z=z)
+        ugv = next((r for r in out["robots"] if r.get("id") == "ugv-1"), None)
+        return {"success": True, "verified_fact": out["reply"], "ugv": ugv, "reply": out["reply"]}
+    except ValueError as e:
+        err = str(e)
+        return {"success": False, "error": err, "verified_fact": f"Failed: {err}"}
 
 
 def pick_item(tool_context: ToolContext, item_id: str) -> Dict[str, Any]:
-    """Pick an item so that it moves with the UGV."""
-    carried = _get_carried_item()
-    if carried:
-        return {"error": f"UGV is already carrying '{carried}'. Drop it first before picking another."}
-    state = get_state()
-    items: List[Dict[str, Any]] = state.get("items", [])
-    item = next((it for it in items if it.get("id") == item_id), None)
-    if item is None:
-        return {"error": f"Item '{item_id}' not found."}
-    if item.get("stack_id"):
-        return {"error": f"Item '{item_id}' is on a stack. Use arm to pick from stack."}
-    held_by = _get_item_held_by(item_id)
-    if held_by:
-        return {"error": f"Item '{item_id}' is already held by {held_by}. It must be released first."}
-
-    x, _, z = _get_ugv_pose()
-    updated_item = upsert_item(item_id, (x, 0.0, z), stack_id=None)
-    update_robot_status("ugv-1", "working", current_task=f"carrying_{item_id}")
-    return {"carried_item": updated_item}
+    """Pick an item (UGV moves to it first, then picks). Returns success, verified_fact, or error."""
+    try:
+        out = execute_warehouse_command("ugv", "pick", item_id=item_id)
+        ugv = next((r for r in out["robots"] if r.get("id") == "ugv-1"), None)
+        return {"success": True, "verified_fact": out["reply"], "ugv": ugv, "reply": out["reply"]}
+    except ValueError as e:
+        err = str(e)
+        return {"success": False, "error": err, "verified_fact": f"Failed: {err}"}
 
 
 def drop_item(tool_context: ToolContext, item_id: str, x: float, z: float) -> Dict[str, Any]:
-    """Drop the carried item at a new ground position."""
-    carried = _get_carried_item()
-    if carried != item_id:
-        return {
-            "error": f"UGV is not carrying '{item_id}'." + (f" (Currently carrying '{carried}')" if carried else ""),
-        }
-    if not is_within_bounds(x, 0.0, z):
-        w, d, _ = get_warehouse_bounds()
-        return {"error": f"Drop position ({x}, {z}) is outside warehouse bounds (0–{w} x 0–{d})."}
-    updated_item = upsert_item(item_id, (x, 0.0, z), stack_id=None)
-    update_robot_status("ugv-1", "idle", current_task=None)
-    return {"dropped_item": updated_item}
+    """Drop the carried item at (x, z). Returns success, verified_fact, or error."""
+    try:
+        out = execute_warehouse_command("ugv", "drop", item_id=item_id, x=x, z=z)
+        ugv = next((r for r in out["robots"] if r.get("id") == "ugv-1"), None)
+        return {"success": True, "verified_fact": out["reply"], "ugv": ugv, "reply": out["reply"]}
+    except ValueError as e:
+        err = str(e)
+        return {"success": False, "error": err, "verified_fact": f"Failed: {err}"}
 
 
 def get_nearby_items(tool_context: ToolContext, radius: float = 3.0) -> Dict[str, Any]:
-    """Return items within a given radius of the UGV."""
+    """Return items within a given radius of the UGV. Use for planning; then call pick_item or move. Report only the result of the action tool."""
     sx, _, sz = _get_ugv_pose()
     state = get_state()
     items: List[Dict[str, Any]] = state.get("items", [])
@@ -155,7 +164,20 @@ def get_nearby_items(tool_context: ToolContext, radius: float = 3.0) -> Dict[str
         dz = float(iz) - sz
         if dx * dx + dz * dz <= r2:
             nearby.append(it)
-    return {"ugv_position": [sx, 0.0, sz], "nearby_items": nearby}
+    return {"success": True, "verified_fact": "Use nearby_items for planning. After calling pick_item or move, report only that tool's verified_fact or error.", "ugv_position": [sx, 0.0, sz], "nearby_items": nearby}
+
+
+def get_robots_positions(tool_context: ToolContext) -> Dict[str, Any]:
+    """Return positions of all robots. Use for planning; after calling move/pick/drop, report only that tool's result."""
+    state = get_state()
+    robots: List[Dict[str, Any]] = state.get("robots", [])
+    positions = []
+    for r in robots:
+        rid = r.get("id")
+        pos = r.get("position") or [0.0, 0.0, 0.0]
+        positions.append({"id": rid, "type": r.get("type"), "position": list(pos)})
+    ugv_pos = _get_ugv_pose()
+    return {"success": True, "verified_fact": "Use all_robots for planning. After calling a move/pick/drop tool, report only that tool's verified_fact or error.", "ugv_position": list(ugv_pos), "all_robots": positions}
 
 
 root_ugv_agent = Agent(
@@ -163,7 +185,7 @@ root_ugv_agent = Agent(
     model=MODEL,
     description="UGV that moves items on the warehouse floor.",
     instruction=UGV_INSTRUCTION,
-    tools=[move_to, pick_item, drop_item, get_nearby_items],
+    tools=[get_robots_positions, move_towards_robot, move_direction, move_to, pick_item, drop_item, get_nearby_items],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.25,
     ),

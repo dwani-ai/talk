@@ -1,7 +1,7 @@
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 from dotenv import load_dotenv
 
@@ -14,14 +14,8 @@ _WAREHOUSE_DIR = os.path.dirname(os.path.abspath(__file__))
 if _WAREHOUSE_DIR not in sys.path:
     sys.path.insert(0, _WAREHOUSE_DIR)
 
-from state_store import (  # type: ignore[import-not-found]
-    get_state,
-    get_warehouse_bounds,
-    is_within_bounds,
-    update_robot_position,
-    update_robot_status,
-    upsert_item,
-)
+from state_store import get_state  # type: ignore[import-not-found]
+from commands import execute_warehouse_command  # type: ignore[import-not-found]
 
 
 load_dotenv()
@@ -40,112 +34,122 @@ MODEL = LiteLlm(
 ARM_INSTRUCTION = """
 You control a stationary manipulator arm that stacks and places items.
 
-- Always match the user's language.
-- Keep replies short and suitable for TTS.
+Response rule — no hallucination: You MUST respond ONLY from the last tool result.
+- If the tool returned success=True and verified_fact: output exactly that verified_fact (or one short paraphrase in the user's language). Do not add positions or outcomes not in the tool output.
+- If the tool returned success=False or an error: output only that the action failed and the error message. Do not claim success.
+Never claim that an item was picked or placed unless you have just called the tool and are using only its verified_fact or error.
 
 Tools:
-- move_arm(x, y, z): move the arm's end-effector in 3D space.
-- pick_from_stack(stack_id): pick the top-most item from a stack.
-- place_on_stack(stack_id, item_id): place an item onto a stack, increasing its height.
-- get_stacks(): list stacks and their items.
+- get_robots_positions(): positions of all robots (for planning).
+- move_towards_robot(robot_id): one step toward ugv-1 or uav-1, stopping short.
+- move_direction(direction): move 5 units north/south/east/west.
+- move_arm(x, y, z): move end-effector to (x,y,z). Held item moves with arm.
+- pick_from_stack(stack_id): pick top-most item from stack.
+- place_on_stack(stack_id, item_id): place held item onto stack.
+- get_stacks(): list stacks and items. Report only what is in the returned data.
 
-Stacks are represented by items that share the same stack_id. The item height is based on how many items are already in that stack.
-You MUST call these tools to move the arm or modify stacks; never claim that an item was picked or placed
-unless you have just used the appropriate tool and you are describing its result.
+Always match the user's language. Keep replies short and TTS-friendly.
 """
 
 
-def _stack_height(stack_id: str) -> int:
+STEP = 5.0
+MIN_DISTANCE_FROM_TARGET = 2.5
+
+
+def move_towards_robot(tool_context: ToolContext, robot_id: str) -> Dict[str, Any]:
+    """Move the arm one step (5 units) toward the given robot (ugv-1, uav-1), stopping short to avoid collision."""
+    robot_id = (robot_id or "").strip().lower()
+    if robot_id in ("arm", "arm-1"):
+        return {"success": False, "error": "Cannot move towards self. Specify ugv-1 or uav-1.", "verified_fact": "Cannot move towards self. Specify ugv-1 or uav-1."}
+    if robot_id in ("ugv", "ugv-1"):
+        robot_id = "ugv-1"
+    elif robot_id in ("uav", "uav-1"):
+        robot_id = "uav-1"
     state = get_state()
-    items: List[Dict[str, Any]] = state.get("items", [])
-    return sum(1 for it in items if it.get("stack_id") == stack_id)
+    target_r = next((r for r in state.get("robots", []) if r.get("id") == robot_id), None)
+    if not target_r:
+        return {"success": False, "error": f"Robot '{robot_id}' not found.", "verified_fact": f"Robot '{robot_id}' not found. Use ugv-1 or uav-1."}
+    tx, ty, tz = target_r.get("position") or [0.0, 0.0, 0.0]
+    tx, ty, tz = float(tx), float(ty), float(tz)
+    robots = state.get("robots", [])
+    arm = next((r for r in robots if r.get("id") == "arm-1"), None)
+    cx, cy, cz = (arm or {}).get("position", [25.0, 0.0, 10.0])
+    dx, dy, dz = tx - cx, ty - cy, tz - cz
+    dist = (dx * dx + dy * dy + dz * dz) ** 0.5
+    if dist < 1e-6:
+        return {"success": True, "verified_fact": "Already at target position.", "arm": arm}
+    if dist <= MIN_DISTANCE_FROM_TARGET:
+        return {"success": True, "verified_fact": f"Already within {MIN_DISTANCE_FROM_TARGET} units of {robot_id}.", "arm": arm}
+    ux, uy, uz = dx / dist, dy / dist, dz / dist
+    step = min(STEP, dist - MIN_DISTANCE_FROM_TARGET)
+    if step < 0.5:
+        return {"success": True, "verified_fact": f"Already near {robot_id}.", "arm": arm}
+    new_x, new_y, new_z = cx + ux * step, cy + uy * step, cz + uz * step
+    try:
+        out = execute_warehouse_command("arm", "move", x=new_x, y=new_y, z=new_z)
+        arm = next((r for r in out["robots"] if r.get("id") == "arm-1"), None)
+        return {"success": True, "verified_fact": out["reply"], "arm": arm, "reply": out["reply"]}
+    except ValueError as e:
+        err = str(e)
+        return {"success": False, "error": err, "verified_fact": f"Failed: {err}"}
 
 
-def _get_holding_item() -> str | None:
-    """Return item_id if arm is holding an item, else None."""
+def move_direction(tool_context: ToolContext, direction: str) -> Dict[str, Any]:
+    """Move the arm 5 units in a direction at current height: north (z-5), south (z+5), east (x+5), west (x-5)."""
+    direction = (direction or "").strip().lower()
+    if direction not in ("north", "south", "east", "west"):
+        return {"success": False, "error": f"Direction must be north, south, east, or west. Got: {direction}", "verified_fact": f"Direction must be north, south, east, or west. Got: {direction}"}
+    try:
+        out = execute_warehouse_command("arm", "move", direction=direction)
+        arm = next((r for r in out["robots"] if r.get("id") == "arm-1"), None)
+        return {"success": True, "verified_fact": out["reply"], "arm": arm, "reply": out["reply"]}
+    except ValueError as e:
+        err = str(e)
+        return {"success": False, "error": err, "verified_fact": f"Failed: {err}"}
+
+
+def get_robots_positions(tool_context: ToolContext) -> Dict[str, Any]:
+    """Return positions of all robots. Use for planning; after calling move/pick/place, report only that tool's result."""
     state = get_state()
-    for r in state.get("robots", []):
-        if r.get("id") == "arm-1":
-            task = r.get("current_task") or ""
-            if task.startswith("holding_"):
-                return task.replace("holding_", "").strip()
-    return None
-
-
-def _get_stack_base(stack_id: str) -> Tuple[float, float]:
-    """Return (x, z) base position for a stack."""
-    state = get_state()
-    items: List[Dict[str, Any]] = state.get("items", [])
-    stack_items = [it for it in items if it.get("stack_id") == stack_id]
-    if stack_items:
-        pos = stack_items[0].get("position") or [25.0, 0.0, 10.0]
-        return float(pos[0]), float(pos[2])
-    return 25.0, 10.0
+    robots = state.get("robots", [])
+    positions = [{"id": r.get("id"), "type": r.get("type"), "position": list(r.get("position") or [0, 0, 0])} for r in robots]
+    arm = next((r for r in robots if r.get("id") == "arm-1"), None)
+    return {"success": True, "verified_fact": "Use all_robots for planning. After calling move/pick/place, report only that tool's verified_fact or error.", "arm_position": list((arm or {}).get("position", [25, 0, 10])), "all_robots": positions}
 
 
 def move_arm(tool_context: ToolContext, x: float, y: float, z: float) -> Dict[str, Any]:
-    """Move the arm end-effector to a new 3D position. Held item moves with it."""
-    if not is_within_bounds(x, y, z):
-        w, d, h = get_warehouse_bounds()
-        return {"error": f"Position ({x}, {y}, {z}) is outside warehouse bounds (0–{w} x 0–{d} x 0–{h})."}
-    arm = update_robot_position("arm-1", x, y, z)
-    holding = _get_holding_item()
-    if holding:
-        upsert_item(holding, (x, y, z), stack_id=None)
-        update_robot_status("arm-1", "working", current_task=f"holding_{holding}")
-    else:
-        update_robot_status("arm-1", "moving", current_task=f"moving_to_{x:.1f}_{y:.1f}_{z:.1f}")
-    return {"arm": arm}
+    """Move the arm end-effector to (x,y,z). Returns success, verified_fact, or error."""
+    try:
+        out = execute_warehouse_command("arm", "move", x=x, y=y, z=z)
+        arm = next((r for r in out["robots"] if r.get("id") == "arm-1"), None)
+        return {"success": True, "verified_fact": out["reply"], "arm": arm, "reply": out["reply"]}
+    except ValueError as e:
+        err = str(e)
+        return {"success": False, "error": err, "verified_fact": f"Failed: {err}"}
 
 
 def pick_from_stack(tool_context: ToolContext, stack_id: str) -> Dict[str, Any]:
-    """Pick the top-most item from the given stack (if any)."""
-    holding = _get_holding_item()
-    if holding:
-        return {"error": f"Arm is already holding '{holding}'. Place it on a stack first before picking another."}
-    state = get_state()
-    items: List[Dict[str, Any]] = state.get("items", [])
-    stack_items = [it for it in items if it.get("stack_id") == stack_id]
-    if not stack_items:
-        return {"error": f"No items found in stack '{stack_id}'."}
-
-    # Use the last item in the stack as the top for this simple demo.
-    item = stack_items[-1]
-    item_id = str(item.get("id"))
-    # Move item to arm position and clear stack_id.
-    for r in state.get("robots", []):
-        if r.get("id") == "arm-1":
-            ax, ay, az = r.get("position", [25.0, 0.0, 10.0])
-            updated_item = upsert_item(item_id, (ax, ay, az), stack_id=None)
-            update_robot_status("arm-1", "working", current_task=f"holding_{item_id}")
-            return {"picked_item": updated_item}
-
-    # Fallback if arm not found.
-    updated_item = upsert_item(item_id, (25.0, 0.0, 10.0), stack_id=None)
-    update_robot_status("arm-1", "working", current_task=f"holding_{item_id}")
-    return {"picked_item": updated_item}
+    """Pick the top-most item from the given stack. Returns success, verified_fact, or error."""
+    try:
+        out = execute_warehouse_command("arm", "pick_from_stack", stack_id=stack_id)
+        return {"success": True, "verified_fact": out["reply"], "picked_item": out.get("items"), "reply": out["reply"]}
+    except ValueError as e:
+        err = str(e)
+        return {"success": False, "error": err, "verified_fact": f"Failed: {err}"}
 
 
 def place_on_stack(tool_context: ToolContext, stack_id: str, item_id: str) -> Dict[str, Any]:
-    """Place an item onto the named stack, updating its vertical position."""
-    holding = _get_holding_item()
-    if holding != item_id:
-        return {
-            "error": f"Arm is not holding '{item_id}'." + (f" (Currently holding '{holding}')" if holding else ""),
-        }
-    level = _stack_height(stack_id)
-    base_x, base_z = _get_stack_base(stack_id)
-    y = 0.5 * (level + 1)
-    if not is_within_bounds(base_x, y, base_z):
-        w, d, h = get_warehouse_bounds()
-        return {"error": f"Stack position would be outside warehouse bounds (0–{w} x 0–{d} x 0–{h})."}
-    updated_item = upsert_item(item_id, (base_x, y, base_z), stack_id=stack_id)
-    update_robot_status("arm-1", "idle", current_task=None)
-    return {"stack_id": stack_id, "item": updated_item, "stack_level": level + 1}
+    """Place an item onto the named stack. Returns success, verified_fact, or error."""
+    try:
+        out = execute_warehouse_command("arm", "place_on_stack", stack_id=stack_id, item_id=item_id)
+        return {"success": True, "verified_fact": out["reply"], "stack_id": stack_id, "reply": out["reply"]}
+    except ValueError as e:
+        err = str(e)
+        return {"success": False, "error": err, "verified_fact": f"Failed: {err}"}
 
 
 def get_stacks(tool_context: ToolContext) -> Dict[str, Any]:
-    """Summarize stacks and their items."""
+    """Summarize stacks and their items. Report only what is in the returned data."""
     state = get_state()
     stacks: Dict[str, Dict[str, Any]] = {}
     for it in state.get("items", []):
@@ -158,7 +162,7 @@ def get_stacks(tool_context: ToolContext) -> Dict[str, Any]:
         )
         s["items"].append(it)
         s["count"] += 1
-    return {"stacks": list(stacks.values())}
+    return {"success": True, "verified_fact": "Report only the stacks and items from the data below. Do not invent or add any stack or item.", "stacks": list(stacks.values())}
 
 
 root_arm_agent = Agent(
@@ -166,7 +170,7 @@ root_arm_agent = Agent(
     model=MODEL,
     description="Arm that stacks and places items on shelves.",
     instruction=ARM_INSTRUCTION,
-    tools=[move_arm, pick_from_stack, place_on_stack, get_stacks],
+    tools=[get_robots_positions, move_towards_robot, move_direction, move_arm, pick_from_stack, place_on_stack, get_stacks],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.25,
     ),

@@ -1,6 +1,6 @@
 # Warehouse Robotics Agents
 
-ADK-powered agents for a simulated warehouse with UAV, UGV, and robotic arm. The warehouse UI (Talk → Warehouse tab) uses a **deterministic command API** for reliable movement and pick/place, plus an optional orchestrator agent for natural-language control.
+ADK-powered agents for a simulated warehouse with UAV, UGV, and robotic arm. The warehouse UI (Talk → Warehouse tab) chat sends all messages to the **warehouse orchestrator agent**; the agent routes to UAV, UGV, or arm and uses tools to move, pick, drop, and avoid collisions. The deterministic command API (`/v1/warehouse/command`) remains available for programmatic use.
 
 **Rule:** Items cannot move independently. Robots must move to the target location before they can pick or place. Each pick/place command first moves the robot to the required position, then performs the manipulation.
 
@@ -12,9 +12,13 @@ ADK-powered agents for a simulated warehouse with UAV, UGV, and robotic arm. The
 | **UGV** | Moves items on the ground (pick from floor, drop at position) |
 | **Arm** | Picks from stacks and places items on stacks |
 
-## Deterministic Commands (Warehouse UI)
+## Chat (agent-only)
 
-Type these in the Warehouse tab chat. They bypass the LLM and update state directly, so the 3D view reflects changes immediately.
+In the Warehouse tab, every message is sent to the **warehouse_orchestrator** agent. You can use natural language or short commands (e.g. "ugv pick item-1", "move towards arm", "ugv drop item-1 at 10 5"). The agent routes to the right robot and calls tools; the 3D view updates from `/v1/warehouse/state`.
+
+## Deterministic Command API (programmatic)
+
+The following commands are supported by `POST /v1/warehouse/command` for scripts or other clients. The Warehouse tab chat does **not** use this; it uses the agent only.
 
 ### Move
 
@@ -95,4 +99,4 @@ All agents and the command API read/write this store.
 
 ## Orchestrator Agent
 
-When a chat message does **not** match a deterministic command pattern, it is sent to the `warehouse_orchestrator` agent, which routes to UAV, UGV, or arm sub-agents. Use for natural-language queries (e.g. “what are the robots doing?”). Movement via the orchestrator depends on the LLM calling tools; for reliable UX, prefer the deterministic commands above.
+When a chat message does **not** match a deterministic command pattern, it is sent to the `warehouse_orchestrator` agent, which routes to UAV, UGV, or arm sub-agents. Routing: call_uav (mapping), call_ugv (pick/drop/move), call_arm (stack), get_robots_state, get_warehouse_state. Sub-agents have get_robots_positions() and move_direction. All move tools enforce collision avoidance (refuse if another robot occupies the target). For natural-language queries (e.g. “what are the robots doing?”). Movement via the orchestrator depends on the LLM calling tools; for reliable UX, prefer the deterministic commands above.

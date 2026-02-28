@@ -3,7 +3,7 @@ import logging
 import os
 import sys
 from importlib import util as importlib_util
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
@@ -19,6 +19,7 @@ if _WAREHOUSE_DIR not in sys.path:
   sys.path.insert(0, _WAREHOUSE_DIR)
 
 from state_store import get_state  # type: ignore[import-not-found]
+from commands import execute_warehouse_command, verify_warehouse_state_after_command  # type: ignore[import-not-found]
 
 
 load_dotenv()
@@ -126,31 +127,103 @@ async def _run_subagent_message_async(runner: Runner, session_id: str, message: 
 
 
 async def call_uav(tool_context: ToolContext, message: str) -> Dict[str, Any]:
-    """Delegate this turn to the UAV mapping agent."""
+    """Delegate to UAV agent. Your reply MUST be only the returned verified_fact (or brief paraphrase); do not add outcomes."""
     session_id = _session_id_from_context(tool_context)
     reply = await _run_subagent_message_async(uav_runner, session_id, message)
     tool_context.state["active_robot"] = "uav"
-    return {"reply": reply, "target": "uav"}
+    return {"success": True, "verified_fact": reply, "reply": reply, "target": "uav"}
 
 
 async def call_ugv(tool_context: ToolContext, message: str) -> Dict[str, Any]:
-    """Delegate this turn to the UGV ground-mover agent."""
+    """Delegate to UGV agent. Your reply MUST be only the returned verified_fact (or brief paraphrase); do not add outcomes."""
     session_id = _session_id_from_context(tool_context)
     reply = await _run_subagent_message_async(ugv_runner, session_id, message)
     tool_context.state["active_robot"] = "ugv"
-    return {"reply": reply, "target": "ugv"}
+    return {"success": True, "verified_fact": reply, "reply": reply, "target": "ugv"}
 
 
 async def call_arm(tool_context: ToolContext, message: str) -> Dict[str, Any]:
-    """Delegate this turn to the arm / stacking agent."""
+    """Delegate to arm agent. Your reply MUST be only the returned verified_fact (or brief paraphrase); do not add outcomes."""
     session_id = _session_id_from_context(tool_context)
     reply = await _run_subagent_message_async(arm_runner, session_id, message)
     tool_context.state["active_robot"] = "arm"
-    return {"reply": reply, "target": "arm"}
+    return {"success": True, "verified_fact": reply, "reply": reply, "target": "arm"}
+
+
+def run_warehouse_command(
+    tool_context: ToolContext,
+    robot: str,
+    action: str = "move",
+    direction: Optional[str] = None,
+    item_id: Optional[str] = None,
+    stack_id: Optional[str] = None,
+    x: Optional[float] = None,
+    y: Optional[float] = None,
+    z: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Execute a single warehouse command, then verify state actually changed. Returns success, verified_fact, warehouse_state (verified snapshot), or error. Respond only with verified_fact or the error."""
+    robot_key = (robot or "").strip().lower()
+    action_key = (action or "move").strip().lower() or "move"
+    direction_key = (direction and direction.strip().lower()) or None
+    item_id_clean = (item_id and item_id.strip()) or None
+    stack_id_clean = (stack_id and stack_id.strip()) or None
+    state_before = get_state()
+    try:
+        out = execute_warehouse_command(
+            robot=robot_key,
+            action=action_key,
+            direction=direction_key,
+            item_id=item_id_clean,
+            stack_id=stack_id_clean,
+            x=x,
+            y=y,
+            z=z,
+        )
+    except ValueError as e:
+        err = str(e)
+        return {
+            "success": False,
+            "error": err,
+            "verified_fact": f"Command failed: {err}",
+        }
+    # Verify state actually reflects the command
+    state_after = get_state()
+    ok, reason = verify_warehouse_state_after_command(
+        robot_key,
+        action_key,
+        state_after,
+        prev_state=state_before,
+        direction=direction_key,
+        item_id=item_id_clean,
+        stack_id=stack_id_clean,
+        x=x,
+        y=y,
+        z=z,
+    )
+    if not ok:
+        err = f"State verification failed: {reason}. Do not claim the command succeeded."
+        return {
+            "success": False,
+            "error": err,
+            "verified_fact": err,
+        }
+    reply = out.get("reply", "")
+    return {
+        "success": True,
+        "verified_fact": reply,
+        "reply": reply,
+        "robots": state_after.get("robots", []),
+        "items": state_after.get("items", []),
+        "warehouse_state": {
+            "warehouse": state_after.get("warehouse", {}),
+            "robots": state_after.get("robots", []),
+            "items": state_after.get("items", []),
+        },
+    }
 
 
 def get_robots_state(tool_context: ToolContext) -> Dict[str, Any]:
-    """Return a snapshot of all robots with their positions, status, and current tasks."""
+    """Return a snapshot of all robots with their positions, status, and current tasks. You may only report what is in the returned data; do not add or invent any robot or position."""
     state = get_state()
     robots: List[Dict[str, Any]] = state.get("robots", [])
     summary = [
@@ -164,52 +237,60 @@ def get_robots_state(tool_context: ToolContext) -> Dict[str, Any]:
         for r in robots
     ]
     return {
+        "success": True,
+        "verified_fact": "Report only the robot ids, positions, status, and current_task from the robots list below. Do not invent or add any robot or position.",
         "robots": summary,
         "warehouse": state.get("warehouse", {}),
     }
 
 
+def get_warehouse_state(tool_context: ToolContext) -> Dict[str, Any]:
+    """Return full warehouse state: robots, items, and bounds. You may only report what is in the returned data; do not add or invent any item or position."""
+    state = get_state()
+    return {
+        "success": True,
+        "verified_fact": "Report only the robots and items from the data below (ids, positions, stack_id). Do not invent or add any item or position.",
+        "robots": state.get("robots", []),
+        "items": state.get("items", []),
+        "warehouse": state.get("warehouse", {}),
+    }
+
+
 WAREHOUSE_ORCHESTRATOR_INSTRUCTION = """
-You are a warehouse robotics orchestrator. You manage three specialist robots:
+You are a warehouse robotics orchestrator. You manage three specialist robots: UAV (mapping), UGV (ground pick/drop/move), Arm (stacks).
 
-- UAV: maps items by flying and scanning areas.
-- UGV: moves items on the ground.
-- Arm: stacks and places items on shelves.
+ALWAYS use run_warehouse_command for these — the 3D view updates only when you use this tool (never use call_uav/call_ugv/call_arm for them):
+- Any "move <robot> <direction>" or "<robot> move <direction>": e.g. "move ugv north", "move uav south", "ugv move east", "uav south", "move arm west" → run_warehouse_command(robot=ugv or uav or arm, action="move", direction=north or south or east or west). Extract robot and direction from the user message.
+- "ugv pick item-1", "pick item-2" (UGV) → run_warehouse_command(robot="ugv", action="pick", item_id="item-1")
+- "ugv drop item-1 at 10 5" → run_warehouse_command(robot="ugv", action="drop", item_id="item-1", x=10, z=5)
+- "arm pick from stack stack-1" → run_warehouse_command(robot="arm", action="pick_from_stack", stack_id="stack-1")
+- "arm place item-1 on stack stack-1" → run_warehouse_command(robot="arm", action="place_on_stack", stack_id="stack-1", item_id="item-1")
 
-Users may give high-level commands like:
-- "Scan the north aisle and show me the items there."
-- "Move box A-1 next to the loading dock."
-- "Stack the three parcels on rack 2."
+Use call_ugv / call_uav / call_arm ONLY for:
+- "move ugv towards arm", "move towards arm" (not a cardinal direction) → call_ugv
+- "scan the area", "find items", "map the warehouse" → call_uav
+- Vague or multi-step requests → call the appropriate sub-agent
 
-They may also ask for a status update, like:
-- "What are the robots doing right now?"
-- "Where are all the robots and what are their tasks?"
+State and queries:
+- get_robots_state: "what are robots doing?", "robot status", "where are the robots?"
+- get_warehouse_state: "where are the items?", "inventory", "what items exist?"
 
-Behavior:
-- Detect the user's intent and choose exactly one tool:
-  - call_uav for mapping / scanning / aerial movements.
-  - call_ugv for moving items on the floor.
-  - call_arm for stacking / unstacking / placing on shelves.
-  - get_robots_state when the user asks about current robot state or tasks.
-- If you are unsure which robot should handle a request, ask ONE short clarification question.
-- You MUST call at least one tool for every user request; never answer based only on your own reasoning.
-- For movement requests, ensure the relevant sub-agent actually calls its movement tools
-  and base your summary on the positions returned by those tools.
-- For status questions ("what are the robots doing?"), ALWAYS call get_robots_state and answer
-  only using the positions, status, and current_task values returned by that tool.
+You MUST call exactly one tool per user request; never answer from memory.
 
-Language and style:
-- Detect the user's language and respond in the SAME language.
-- Keep responses concise and TTS-friendly (1–3 short sentences).
+VALIDATION — no hallucination: Your reply MUST be based ONLY on the tool output.
+- If the tool returned success=True and verified_fact: your reply MUST be that verified_fact (or a brief paraphrase in the user's language). Do not add positions, outcomes, or any fact not in verified_fact.
+- If the tool returned success=False or an error: your reply MUST state that the command failed and include the error message. Do not claim success or invent an outcome.
+- For get_robots_state / get_warehouse_state: report only what is in the returned data; do not invent any robot, item, or position.
+Detect the user's language and respond in the SAME language. Keep replies concise and TTS-friendly.
 """
 
 
 root_warehouse_orchestrator_agent = Agent(
     name="warehouse_orchestrator",
     model=MODEL,
-    description="Routes warehouse tasks to UAV, UGV, or arm robot agents and can report current robot state.",
+    description="Routes warehouse tasks to UAV, UGV, or arm robot agents and can report robot/item state.",
     instruction=WAREHOUSE_ORCHESTRATOR_INSTRUCTION,
-    tools=[call_uav, call_ugv, call_arm, get_robots_state],
+    tools=[run_warehouse_command, call_uav, call_ugv, call_arm, get_robots_state, get_warehouse_state],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.25,
     ),

@@ -387,8 +387,8 @@ async def call_llm(user_text: str, context: Optional[List[Dict[str, str]]] = Non
     return " ".join(str(content).strip().split())
 
 
-async def call_agent(agent_name: str, user_text: str, session_id: Optional[str]) -> str:
-    """Send text to the agents service for a named agent."""
+async def call_agent(agent_name: str, user_text: str, session_id: Optional[str]) -> Dict[str, Any]:
+    """Send text to the agents service for a named agent. Returns dict with 'reply' and optionally 'warehouse_state' (for warehouse_orchestrator)."""
     if not AGENT_BASE_URL:
         raise HTTPException(status_code=502, detail="Agent service base URL is not configured")
     if not session_id:
@@ -414,7 +414,10 @@ async def call_agent(agent_name: str, user_text: str, session_id: Optional[str])
     reply = data.get("reply")
     if not reply or not str(reply).strip():
         raise HTTPException(status_code=502, detail="Agent returned empty response")
-    return " ".join(str(reply).strip().split())
+    result: Dict[str, Any] = {"reply": " ".join(str(reply).strip().split())}
+    if data.get("warehouse_state") is not None and isinstance(data["warehouse_state"], dict):
+        result["warehouse_state"] = data["warehouse_state"]
+    return result
 
 
 from enum import Enum
@@ -440,7 +443,7 @@ class ChatRequest(BaseModel):
     tags=["Chat"],
 )
 @limiter.limit("60/minute")
-async def chat(request: Request, payload: ChatRequest) -> Dict[str, str]:
+async def chat(request: Request, payload: ChatRequest) -> Dict[str, Any]:
     text = (payload.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Text must not be empty")
@@ -450,14 +453,19 @@ async def chat(request: Request, payload: ChatRequest) -> Dict[str, str]:
 
     if payload.mode == "agent":
         selected_agent = payload.agent_name or "travel_planner"
-        reply = await call_agent(selected_agent, text, session_id=session_id)
+        agent_result = await call_agent(selected_agent, text, session_id=session_id)
+        reply = agent_result["reply"]
+        out: Dict[str, Any] = {"user": text, "reply": reply}
+        if agent_result.get("warehouse_state") is not None:
+            out["warehouse_state"] = agent_result["warehouse_state"]
+        if session_id:
+            _append_to_session(session_id, text, reply)
+        return out
     else:
         reply = await call_llm(text, context=context)
-
-    if session_id:
-        _append_to_session(session_id, text, reply)
-
-    return {"user": text, "reply": reply}
+        if session_id:
+            _append_to_session(session_id, text, reply)
+        return {"user": text, "reply": reply}
 
 
 @app.post("/v1/speech_to_speech",
@@ -503,7 +511,8 @@ async def speech_to_speech(
 
         if mode == "agent":
             selected_agent = agent_name or "travel_planner"
-            llm_text = await call_agent(selected_agent, text, session_id=session_id)
+            agent_result = await call_agent(selected_agent, text, session_id=session_id)
+            llm_text = agent_result["reply"]
         else:
             llm_text = await call_llm(text, context=context)
 

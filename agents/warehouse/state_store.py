@@ -2,6 +2,8 @@ import threading
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
+# Sentinel: when passed to upsert_robot, means "do not change this field"
+_UNSET = object()
 
 _lock = threading.Lock()
 
@@ -87,10 +89,10 @@ def upsert_robot(
     robot_type: Optional[str] = None,
     position: Optional[Tuple[float, float, float]] = None,
     orientation: Optional[Tuple[float, float, float]] = None,
-    status: Optional[str] = None,
-    current_task: Optional[str] = None,
+    status: Optional[str] = _UNSET,
+    current_task: Optional[str] = _UNSET,
 ) -> Dict[str, Any]:
-    """Create or update a robot entry in the state store."""
+    """Create or update a robot entry in the state store. Use _UNSET for status/current_task to leave them unchanged."""
     with _lock:
         robots: List[Dict[str, Any]] = _state.setdefault("robots", [])
         idx = _find_robot_index(robot_id)
@@ -100,8 +102,8 @@ def upsert_robot(
                 "type": robot_type or "unknown",
                 "position": list(position) if position is not None else [0.0, 0.0, 0.0],
                 "orientation": list(orientation) if orientation is not None else [0.0, 0.0, 0.0],
-                "status": status or "idle",
-                "current_task": current_task,
+                "status": status if status is not _UNSET else "idle",
+                "current_task": current_task if current_task is not _UNSET else None,
             }
             robots.append(robot)
         else:
@@ -112,10 +114,9 @@ def upsert_robot(
                 robot["position"] = list(position)
             if orientation is not None:
                 robot["orientation"] = list(orientation)
-            if status is not None:
+            if status is not _UNSET:
                 robot["status"] = status
-            if current_task is not None or current_task is None:
-                # Allow explicitly clearing current_task by passing None.
+            if current_task is not _UNSET:
                 robot["current_task"] = current_task
 
         return deepcopy(robot)
@@ -125,7 +126,8 @@ def update_robot_position(robot_id: str, x: float, y: float, z: float) -> Dict[s
     return upsert_robot(robot_id, position=(x, y, z))
 
 
-def update_robot_status(robot_id: str, status: str, current_task: Optional[str] = None) -> Dict[str, Any]:
+def update_robot_status(robot_id: str, status: str, current_task: Optional[str] = _UNSET) -> Dict[str, Any]:
+    """Update robot status. Pass current_task=None to clear, or omit to leave unchanged."""
     return upsert_robot(robot_id, status=status, current_task=current_task)
 
 
@@ -174,4 +176,36 @@ def is_within_bounds(x: float, y: float, z: float) -> bool:
     """Check if a point is within warehouse bounds."""
     w, d, h = get_warehouse_bounds()
     return 0 <= x <= w and 0 <= z <= d and 0 <= y <= h
+
+
+def position_occupied_by_other(
+    robot_id: str,
+    x: float,
+    y: float,
+    z: float,
+    tolerance: float = 2.0,
+) -> Optional[Dict[str, Any]]:
+    """Return the other robot that would be collided with at (x,y,z), or None. Uses 3D distance."""
+    with _lock:
+        robots = _state.get("robots", [])
+        for r in robots:
+            rid = r.get("id")
+            if rid == robot_id:
+                continue
+            pos = r.get("position") or [0.0, 0.0, 0.0]
+            rx, ry, rz = float(pos[0]), float(pos[1]), float(pos[2])
+            dist = ((x - rx) ** 2 + (y - ry) ** 2 + (z - rz) ** 2) ** 0.5
+            if dist < tolerance:
+                return {"id": rid, "type": r.get("type"), "position": pos}
+    return None
+
+
+def get_all_robots_positions() -> List[Dict[str, Any]]:
+    """Return positions of all robots. Shared helper for collision awareness."""
+    with _lock:
+        robots = _state.get("robots", [])
+        return [
+            {"id": r.get("id"), "type": r.get("type"), "position": list(r.get("position") or [0, 0, 0])}
+            for r in robots
+        ]
 
