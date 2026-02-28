@@ -456,6 +456,17 @@ export default function App() {
           </label>
           </div>
 
+          <div className="voice-stage">
+            <div className={`voice-status ${status}`}>
+              <span className="voice-status-label">Voice status</span>
+              <strong>{statusLabel}</strong>
+              <div className="voice-pipeline">
+                <span className={progressStep === 'transcribing' ? 'active' : ''}>ASR</span>
+                <span className={progressStep === 'thinking' ? 'active' : ''}>Agent</span>
+                <span className={progressStep === 'generating_speech' ? 'active' : ''}>TTS</span>
+              </div>
+            </div>
+
           <button
             className={`mic ${status}`}
             onPointerDown={handlePointerDown}
@@ -469,6 +480,8 @@ export default function App() {
             <span className="icon">{status === 'recording' ? '⏹' : '🎤'}</span>
             <span className="label">{statusLabel}</span>
           </button>
+          <p className="voice-hint">Hold to speak, release to get a spoken reply.</p>
+          </div>
         </div>
 
         {!isOnline && (
