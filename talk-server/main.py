@@ -86,6 +86,8 @@ app = FastAPI(
         {"name": "Chat", "description": "Chat-related endpoints"},
         {"name": "Audio", "description": "Audio processing and TTS endpoints"},
         {"name": "Translation", "description": "Text translation endpoints"},
+        {"name": "Warehouse", "description": "Warehouse simulation endpoints"},
+        {"name": "Chess", "description": "Chess gameplay endpoints"},
     ],
 )
 app.state.limiter = limiter
@@ -139,6 +141,100 @@ async def add_request_id(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Request-ID"] = request.state.request_id
     return response
+
+
+@app.get(
+    "/v1/warehouse/state",
+    summary="Get warehouse robots and items state",
+    description="Proxy endpoint that returns the current simulated warehouse state (robots, items, bounds) for visualization.",
+    tags=["Warehouse"],
+)
+@limiter.limit("60/minute")
+async def get_warehouse_state(request: Request) -> Dict[str, Any]:
+    """Fetch warehouse state from the agents service."""
+    agent_base = os.getenv("DWANI_AGENT_BASE_URL", "").rstrip("/")
+    if not agent_base:
+        raise HTTPException(status_code=502, detail="Agent service base URL is not configured")
+    url = f"{agent_base}/v1/warehouse/state"
+    try:
+        async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+            resp = await client.get(url)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error(f"Warehouse state request failed: {exc}")
+        raise HTTPException(status_code=502, detail="Failed to reach warehouse state service") from exc
+    if resp.status_code != 200:
+        logger.error(f"Warehouse state service returned {resp.status_code}: {resp.text}")
+        raise HTTPException(status_code=502, detail="Warehouse state service returned an error")
+    data = resp.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="Warehouse state service returned invalid data")
+    return data
+
+
+@app.get(
+    "/v1/chess/state",
+    summary="Get chess game state",
+    description="Proxy endpoint that returns the current chess board, turn, mode, and move history.",
+    tags=["Chess"],
+)
+@limiter.limit("60/minute")
+async def get_chess_state(request: Request) -> Dict[str, Any]:
+    """Fetch chess state from the agents service."""
+    agent_base = os.getenv("DWANI_AGENT_BASE_URL", "").rstrip("/")
+    if not agent_base:
+        raise HTTPException(status_code=502, detail="Agent service base URL is not configured")
+    url = f"{agent_base}/v1/chess/state"
+    try:
+        async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+            resp = await client.get(url)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error(f"Chess state request failed: {exc}")
+        raise HTTPException(status_code=502, detail="Failed to reach chess state service") from exc
+    if resp.status_code != 200:
+        logger.error(f"Chess state service returned {resp.status_code}: {resp.text}")
+        raise HTTPException(status_code=502, detail="Chess state service returned an error")
+    data = resp.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="Chess state service returned invalid data")
+    return data
+
+
+class WarehouseCommandRequest(BaseModel):
+    robot: str = Field(..., description="Robot to control: 'uav', 'ugv', or 'arm'.")
+    action: str | None = Field(default=None, description="Action: move, pick, drop, pick_from_stack, place_on_stack.")
+    direction: str | None = Field(default=None, description="Direction: north, south, east, or west.")
+    item_id: str | None = Field(default=None)
+    stack_id: str | None = Field(default=None)
+    x: float | None = Field(default=None)
+    y: float | None = Field(default=None)
+    z: float | None = Field(default=None)
+
+
+@app.post(
+    "/v1/warehouse/command",
+    summary="Send a deterministic warehouse command",
+    description="Directly update warehouse robot positions via the agents service.",
+    tags=["Warehouse"],
+)
+@limiter.limit("60/minute")
+async def proxy_warehouse_command(request: Request, body: WarehouseCommandRequest) -> Dict[str, Any]:
+    agent_base = os.getenv("DWANI_AGENT_BASE_URL", "").rstrip("/")
+    if not agent_base:
+        raise HTTPException(status_code=502, detail="Agent service base URL is not configured")
+    url = f"{agent_base}/v1/warehouse/command"
+    try:
+        async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+            resp = await client.post(url, json=body.model_dump())
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error(f"Warehouse command request failed: {exc}")
+        raise HTTPException(status_code=502, detail="Failed to reach warehouse command service") from exc
+    if resp.status_code != 200:
+        logger.error(f"Warehouse command service returned {resp.status_code}: {resp.text}")
+        raise HTTPException(status_code=502, detail="Warehouse command service returned an error")
+    data = resp.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="Warehouse command service returned invalid data")
+    return data
 
 
 @app.get("/health", tags=["Health"])
@@ -321,8 +417,8 @@ async def call_llm(user_text: str, context: Optional[List[Dict[str, str]]] = Non
     return " ".join(str(content).strip().split())
 
 
-async def call_agent(agent_name: str, user_text: str, session_id: Optional[str]) -> str:
-    """Send text to the agents service for a named agent."""
+async def call_agent(agent_name: str, user_text: str, session_id: Optional[str]) -> Dict[str, Any]:
+    """Send text to agents service. Returns reply and optional state payloads."""
     if not AGENT_BASE_URL:
         raise HTTPException(status_code=502, detail="Agent service base URL is not configured")
     if not session_id:
@@ -348,7 +444,12 @@ async def call_agent(agent_name: str, user_text: str, session_id: Optional[str])
     reply = data.get("reply")
     if not reply or not str(reply).strip():
         raise HTTPException(status_code=502, detail="Agent returned empty response")
-    return " ".join(str(reply).strip().split())
+    result: Dict[str, Any] = {"reply": " ".join(str(reply).strip().split())}
+    if data.get("warehouse_state") is not None and isinstance(data["warehouse_state"], dict):
+        result["warehouse_state"] = data["warehouse_state"]
+    if data.get("chess_state") is not None and isinstance(data["chess_state"], dict):
+        result["chess_state"] = data["chess_state"]
+    return result
 
 
 from enum import Enum
@@ -374,7 +475,7 @@ class ChatRequest(BaseModel):
     tags=["Chat"],
 )
 @limiter.limit("60/minute")
-async def chat(request: Request, payload: ChatRequest) -> Dict[str, str]:
+async def chat(request: Request, payload: ChatRequest) -> Dict[str, Any]:
     text = (payload.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Text must not be empty")
@@ -384,14 +485,21 @@ async def chat(request: Request, payload: ChatRequest) -> Dict[str, str]:
 
     if payload.mode == "agent":
         selected_agent = payload.agent_name or "travel_planner"
-        reply = await call_agent(selected_agent, text, session_id=session_id)
+        agent_result = await call_agent(selected_agent, text, session_id=session_id)
+        reply = agent_result["reply"]
+        out: Dict[str, Any] = {"user": text, "reply": reply}
+        if agent_result.get("warehouse_state") is not None:
+            out["warehouse_state"] = agent_result["warehouse_state"]
+        if agent_result.get("chess_state") is not None:
+            out["chess_state"] = agent_result["chess_state"]
+        if session_id:
+            _append_to_session(session_id, text, reply)
+        return out
     else:
         reply = await call_llm(text, context=context)
-
-    if session_id:
-        _append_to_session(session_id, text, reply)
-
-    return {"user": text, "reply": reply}
+        if session_id:
+            _append_to_session(session_id, text, reply)
+        return {"user": text, "reply": reply}
 
 
 @app.post("/v1/speech_to_speech",
@@ -437,7 +545,8 @@ async def speech_to_speech(
 
         if mode == "agent":
             selected_agent = agent_name or "travel_planner"
-            llm_text = await call_agent(selected_agent, text, session_id=session_id)
+            agent_result = await call_agent(selected_agent, text, session_id=session_id)
+            llm_text = agent_result["reply"]
         else:
             llm_text = await call_llm(text, context=context)
 

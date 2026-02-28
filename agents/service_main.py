@@ -13,6 +13,11 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
+from warehouse.state_store import get_state as get_warehouse_state_snapshot
+from warehouse.commands import execute_warehouse_command, verify_warehouse_state_after_command
+from warehouse.direct_commands import parse_direct_warehouse_command
+from chess.state_store import get_state as get_chess_state_snapshot
+
 # Ensure we can import the travel-planner and viva-examiner agent modules
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -72,6 +77,41 @@ except Exception as exc:  # pragma: no cover - import-time failure logging
     raise RuntimeError(f"Failed to import orchestrator agent: {exc}") from exc
 
 
+WAREHOUSE_AGENT_DIR = os.path.join(CURRENT_DIR, "warehouse")
+WAREHOUSE_AGENT_PATH = os.path.join(WAREHOUSE_AGENT_DIR, "orchestrator_agent.py")
+
+try:
+    warehouse_spec = importlib_util.spec_from_file_location(
+        "warehouse_orchestrator_agent", WAREHOUSE_AGENT_PATH
+    )
+    if warehouse_spec is None or warehouse_spec.loader is None:
+        raise RuntimeError("Could not load spec for warehouse orchestrator agent")
+    warehouse_module = importlib_util.module_from_spec(warehouse_spec)
+    warehouse_spec.loader.exec_module(warehouse_module)  # type: ignore[attr-defined]
+    root_warehouse_orchestrator_agent = getattr(
+        warehouse_module, "root_warehouse_orchestrator_agent"
+    )
+except Exception as exc:  # pragma: no cover - import-time failure logging
+    raise RuntimeError(f"Failed to import warehouse orchestrator agent: {exc}") from exc
+
+CHESS_AGENT_DIR = os.path.join(CURRENT_DIR, "chess")
+CHESS_AGENT_PATH = os.path.join(CHESS_AGENT_DIR, "orchestrator_agent.py")
+
+try:
+    chess_spec = importlib_util.spec_from_file_location(
+        "chess_orchestrator_agent", CHESS_AGENT_PATH
+    )
+    if chess_spec is None or chess_spec.loader is None:
+        raise RuntimeError("Could not load spec for chess orchestrator agent")
+    chess_module = importlib_util.module_from_spec(chess_spec)
+    chess_spec.loader.exec_module(chess_module)  # type: ignore[attr-defined]
+    root_chess_orchestrator_agent = getattr(
+        chess_module, "root_chess_orchestrator_agent"
+    )
+except Exception as exc:  # pragma: no cover - import-time failure logging
+    raise RuntimeError(f"Failed to import chess orchestrator agent: {exc}") from exc
+
+
 logger = logging.getLogger("agents_service")
 logging.basicConfig(level=logging.INFO)
 
@@ -86,6 +126,40 @@ class ChatResponse(BaseModel):
     state: Dict[str, Any] | None = Field(
         default=None,
         description="Optional debug snapshot of agent state for this session.",
+    )
+    warehouse_state: Dict[str, Any] | None = Field(
+        default=None,
+        description="Verified warehouse state (robots, items, warehouse) when agent is warehouse_orchestrator; use to update 3D view.",
+    )
+    chess_state: Dict[str, Any] | None = Field(
+        default=None,
+        description="Chess board state when agent is chess_orchestrator; use to update board view.",
+    )
+
+
+class WarehouseCommandRequest(BaseModel):
+    robot: str = Field(..., description="Robot to control: 'uav', 'ugv', or 'arm'.")
+    action: str | None = Field(
+        default=None,
+        description="Action: 'move', 'pick', 'drop', 'pick_from_stack', 'place_on_stack'.",
+    )
+    direction: str | None = Field(
+        default=None,
+        description="Optional direction: 'north', 'south', 'east', or 'west'.",
+    )
+    item_id: str | None = Field(default=None, description="Item ID for pick/drop/place_on_stack.")
+    stack_id: str | None = Field(default=None, description="Stack ID for pick_from_stack or place_on_stack.")
+    x: float | None = Field(
+        default=None,
+        description="Optional absolute X coordinate.",
+    )
+    y: float | None = Field(
+        default=None,
+        description="Optional absolute Y coordinate.",
+    )
+    z: float | None = Field(
+        default=None,
+        description="Optional absolute Z coordinate.",
     )
 
 
@@ -119,6 +193,18 @@ _agents: Dict[str, Runner] = {
         app_name=APP_NAME,
         session_service=_session_service,
     ),
+    # Warehouse orchestrator for UAV, UGV, and arm robots.
+    "warehouse_orchestrator": Runner(
+        agent=root_warehouse_orchestrator_agent,
+        app_name=APP_NAME,
+        session_service=_session_service,
+    ),
+    # Chess orchestrator for game commands and AI moves.
+    "chess_orchestrator": Runner(
+        agent=root_chess_orchestrator_agent,
+        app_name=APP_NAME,
+        session_service=_session_service,
+    ),
 }
 
 
@@ -142,6 +228,42 @@ def healthz() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/v1/warehouse/state")
+def get_warehouse_state() -> Dict[str, Any]:
+    """Return the current warehouse robots/items state for visualization."""
+    snapshot = get_warehouse_state_snapshot()
+    if not isinstance(snapshot, dict):
+        raise HTTPException(status_code=500, detail="Invalid warehouse state")
+    return snapshot
+
+
+@app.get("/v1/chess/state")
+def get_chess_state() -> Dict[str, Any]:
+    """Return current chess board and game metadata."""
+    snapshot = get_chess_state_snapshot()
+    if not isinstance(snapshot, dict):
+        raise HTTPException(status_code=500, detail="Invalid chess state")
+    return snapshot
+
+
+@app.post("/v1/warehouse/command")
+def warehouse_command(cmd: WarehouseCommandRequest) -> Dict[str, Any]:
+    """Deterministic warehouse command. Used by API and by agents via execute_warehouse_command."""
+    try:
+        return execute_warehouse_command(
+            robot=cmd.robot,
+            action=cmd.action or "move",
+            direction=cmd.direction,
+            item_id=cmd.item_id,
+            stack_id=cmd.stack_id,
+            x=cmd.x,
+            y=cmd.y,
+            z=cmd.z,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 def _ensure_session(user_id: str, session_id: str) -> None:
     """Create an ADK session if it does not already exist.
 
@@ -161,8 +283,9 @@ def _ensure_session(user_id: str, session_id: str) -> None:
     _known_sessions.add(key)
 
 
-def _run_agent_message(runner: Runner, user_id: str, session_id: str, message: str) -> ChatResponse:
+def _run_agent_message(runner: Runner, user_id: str, session_id: str, message: str, agent_name: str = "") -> ChatResponse:
     _ensure_session(user_id=user_id, session_id=session_id)
+    state_before = get_warehouse_state_snapshot() if agent_name == "warehouse_orchestrator" else None
 
     content = types.Content(role="user", parts=[types.Part(text=message)])
     events = runner.run(
@@ -189,7 +312,59 @@ def _run_agent_message(runner: Runner, user_id: str, session_id: str, message: s
         raise HTTPException(status_code=502, detail="Agent returned empty response")
 
     reply_text = " ".join(" ".join(final_text_parts).split())
-    return ChatResponse(reply=reply_text, state=last_state)
+    warehouse_state = None
+    chess_state = None
+    if agent_name == "warehouse_orchestrator":
+        warehouse_state = get_warehouse_state_snapshot()
+        if not isinstance(warehouse_state, dict):
+            warehouse_state = None
+        # Validate agent result against actual state for direct command-like requests.
+        cmd = parse_direct_warehouse_command(message)
+        if cmd and isinstance(state_before, dict) and isinstance(warehouse_state, dict):
+            ok, reason = verify_warehouse_state_after_command(
+                cmd["robot"],
+                cmd.get("action", "move"),
+                warehouse_state,
+                prev_state=state_before,
+                direction=cmd.get("direction"),
+                item_id=cmd.get("item_id"),
+                stack_id=cmd.get("stack_id"),
+                x=cmd.get("x"),
+                y=cmd.get("y"),
+                z=cmd.get("z"),
+            )
+            if not ok:
+                # Self-heal: if agent response wasn't reflected in state, execute the
+                # same parsed direct command deterministically and return real state.
+                try:
+                    det = execute_warehouse_command(
+                        robot=cmd["robot"],
+                        action=cmd.get("action", "move"),
+                        direction=cmd.get("direction"),
+                        item_id=cmd.get("item_id"),
+                        stack_id=cmd.get("stack_id"),
+                        x=cmd.get("x"),
+                        y=cmd.get("y"),
+                        z=cmd.get("z"),
+                    )
+                    warehouse_state = get_warehouse_state_snapshot()
+                    if not isinstance(warehouse_state, dict):
+                        warehouse_state = {
+                            "warehouse": {},
+                            "robots": det.get("robots", []),
+                            "items": det.get("items", []),
+                        }
+                    reply_text = str(det.get("reply") or "").strip() or "Command completed."
+                except ValueError:
+                    reply_text = (
+                        f"Command not verified against warehouse state: {reason}. "
+                        "No confirmed state change was applied."
+                    )
+    if agent_name == "chess_orchestrator":
+        chess_state = get_chess_state_snapshot()
+        if not isinstance(chess_state, dict):
+            chess_state = None
+    return ChatResponse(reply=reply_text, state=last_state, warehouse_state=warehouse_state, chess_state=chess_state)
 
 
 @app.post("/v1/agents/{agent_name}/chat", response_model=ChatResponse)
@@ -208,7 +383,7 @@ def chat(agent_name: str, body: ChatRequest) -> ChatResponse:
 
     try:
         # Use the external session_id as both user_id and session_id for simplicity.
-        return _run_agent_message(runner, user_id=session_id, session_id=session_id, message=message)
+        return _run_agent_message(runner, user_id=session_id, session_id=session_id, message=message, agent_name=agent_name)
     except HTTPException:
         raise
     except Exception as exc:  # pragma: no cover - defensive error handling

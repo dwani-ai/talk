@@ -1,4 +1,5 @@
 import { useRef, useState, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 
 const SESSION_KEY = 'talk_session_id'
 
@@ -305,10 +306,25 @@ export default function App() {
         </button>
 
         <header>
-          <h1>Talk</h1>
-          <p className="tagline">
-            Push to talk · ASR → {mode === 'agent' ? 'Agent' : 'LLM'} → TTS
-          </p>
+          <div className="header-main">
+            <div>
+              <h1>Talk</h1>
+              <p className="tagline">
+                Push to talk · ASR → {mode === 'agent' ? 'Agent' : 'LLM'} → TTS
+              </p>
+            </div>
+            <nav className="nav-tabs">
+              <Link to="/" className="nav-tab">
+                Talk
+              </Link>
+              <Link to="/warehouse" className="nav-tab">
+                Warehouse
+              </Link>
+              <Link to="/chess" className="nav-tab">
+                Chess
+              </Link>
+            </nav>
+          </div>
         </header>
 
         <div className="controls">
@@ -337,9 +353,13 @@ export default function App() {
                     ? 'agent_viva'
                     : agentName === 'fix_my_city'
                       ? 'agent_fix_my_city'
-                      : agentName === 'orchestrator'
-                        ? 'agent_orchestrator'
-                        : 'agent_travel'
+                      : agentName === 'warehouse_orchestrator'
+                        ? 'agent_warehouse'
+                        : agentName === 'chess_orchestrator'
+                          ? 'agent_chess'
+                        : agentName === 'orchestrator'
+                          ? 'agent_orchestrator'
+                          : 'agent_travel'
               }
               onChange={(e) => {
                 const value = e.target.value
@@ -358,6 +378,12 @@ export default function App() {
                 } else if (value === 'agent_orchestrator') {
                   setMode('agent')
                   setAgentName('orchestrator')
+                } else if (value === 'agent_warehouse') {
+                  setMode('agent')
+                  setAgentName('warehouse_orchestrator')
+                } else if (value === 'agent_chess') {
+                  setMode('agent')
+                  setAgentName('chess_orchestrator')
                 }
               }}
               disabled={status !== 'idle'}
@@ -367,6 +393,8 @@ export default function App() {
               <option value="agent_viva">Viva/voce examiner</option>
               <option value="agent_fix_my_city">Fix my city agent</option>
               <option value="agent_orchestrator">All-in-one assistant</option>
+              <option value="agent_warehouse">Warehouse robots (UAV / UGV / Arm)</option>
+              <option value="agent_chess">Chess orchestrator</option>
             </select>
           </label>
 
