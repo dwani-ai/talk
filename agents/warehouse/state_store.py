@@ -1,6 +1,13 @@
 import threading
+import sys
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
+
+# Ensure a single shared module instance regardless of import style
+# (state_store vs warehouse.state_store), otherwise robot state can split.
+_this_module = sys.modules[__name__]
+sys.modules.setdefault("state_store", _this_module)
+sys.modules.setdefault("warehouse.state_store", _this_module)
 
 # Sentinel: when passed to upsert_robot, means "do not change this field"
 _UNSET = object()
