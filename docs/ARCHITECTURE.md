@@ -106,7 +106,7 @@ cd talk-ui && docker build -t dwani/talk-ux:latest -f Dockerfile .
 cd agents && docker build -t dwani/talk-agents:latest -f Dockerfile .
 ```
 
-Use with `compose.yml` or `compose-integrated.yml`.
+Image names are consistent across compose files: `dwani/talk-server:latest`, `dwani/talk-ux:latest`, `dwani/talk-agents:latest`. Use with `compose.yml`, `compose-dev.yml`, or `compose-integrated.yml`.
 
 ## Chess tab (agent-driven)
 

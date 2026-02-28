@@ -1,7 +1,9 @@
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import { Link, NavLink } from 'react-router-dom'
 
 const SESSION_KEY = 'talk_session_id'
+const CONVERSATIONS_KEY = 'talk_conversations'
+const MAX_CONVERSATIONS_STORED = 50
 
 function getOrCreateSessionId() {
   let id = sessionStorage.getItem(SESSION_KEY)
@@ -10,6 +12,24 @@ function getOrCreateSessionId() {
     sessionStorage.setItem(SESSION_KEY, id)
   }
   return id
+}
+
+function loadConversations() {
+  try {
+    const raw = localStorage.getItem(CONVERSATIONS_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.slice(-MAX_CONVERSATIONS_STORED) : []
+  } catch {
+    return []
+  }
+}
+
+function saveConversations(list) {
+  try {
+    const toSave = list.slice(-MAX_CONVERSATIONS_STORED)
+    localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(toSave))
+  } catch (_) {}
 }
 
 const LANGUAGES = [
@@ -40,15 +60,44 @@ export default function App() {
   const [agentName, setAgentName] = useState('orchestrator')
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState(null)
-  const [conversations, setConversations] = useState([])
+  const [conversations, setConversations] = useState(loadConversations)
   const [sidebarOpen, setSidebarOpen] = useState(
     () => typeof window !== 'undefined' && window.innerWidth >= 768
   )
   const [sessionId, setSessionId] = useState(() => getOrCreateSessionId())
   const [typedMessage, setTypedMessage] = useState('')
+  const [isOnline, setIsOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true))
+  const [canRetry, setCanRetry] = useState(false)
+  const [progressStep, setProgressStep] = useState(null)
+  const lastFailedRequestRef = useRef(null)
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
   const streamRef = useRef(null)
+
+  useEffect(() => {
+    saveConversations(conversations)
+  }, [conversations])
+
+  useEffect(() => {
+    if (status !== 'processing' || !progressStep) return
+    const steps = ['transcribing', 'thinking', 'generating_speech']
+    const idx = steps.indexOf(progressStep)
+    const next = idx < 0 ? 'thinking' : steps[Math.min(idx + 1, steps.length - 1)]
+    const t = setTimeout(() => setProgressStep(next), 2000)
+    return () => clearTimeout(t)
+  }, [status, progressStep])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onOnline = () => setIsOnline(true)
+    const onOffline = () => setIsOnline(false)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
+    return () => {
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
+    }
+  }, [])
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -69,6 +118,7 @@ export default function App() {
       }
       setStatus('processing')
       setError(null)
+      setProgressStep('transcribing')
       const formData = new FormData()
       const ext = blob.type.includes('webm') ? 'webm' : 'wav'
       formData.append('file', blob, `recording.${ext}`)
@@ -105,6 +155,7 @@ export default function App() {
           },
         ])
 
+        setProgressStep(null)
         const audioBlob = base64ToBlob(audio_base64, 'audio/mp3')
         const audioUrl = URL.createObjectURL(audioBlob)
         const audio = new Audio(audioUrl)
@@ -120,8 +171,11 @@ export default function App() {
         }
         await audio.play()
       } catch (e) {
+        setProgressStep(null)
         setError(e.message || 'Request failed')
         setStatus('idle')
+        lastFailedRequestRef.current = { type: 'speech', blob }
+        setCanRetry(true)
       }
     },
     [language, mode, agentName, sessionId]
@@ -132,6 +186,13 @@ export default function App() {
     sessionStorage.setItem(SESSION_KEY, newId)
     setSessionId(newId)
     setConversations([])
+    setError(null)
+    saveConversations([])
+  }, [])
+
+  const clearHistory = useCallback(() => {
+    setConversations([])
+    saveConversations([])
     setError(null)
   }, [])
 
@@ -224,14 +285,58 @@ export default function App() {
     } catch (e) {
       setError(e.message || 'Request failed')
       setStatus('idle')
+      lastFailedRequestRef.current = { type: 'chat', text: typedMessage.trim() }
+      setCanRetry(true)
     }
   }, [typedMessage, status, mode, agentName, sessionId])
 
+  const retryLastRequest = useCallback(() => {
+    const last = lastFailedRequestRef.current
+    setError(null)
+    setCanRetry(false)
+    if (last?.type === 'speech' && last.blob) {
+      sendAndPlay(last.blob)
+    } else if (last?.type === 'chat' && last.text) {
+      setTypedMessage(last.text)
+      setStatus('idle')
+      lastFailedRequestRef.current = null
+      setStatus('processing')
+      const payload = { text: last.text, mode: mode === 'agent' ? 'agent' : 'llm' }
+      if (mode === 'agent') payload.agent_name = agentName
+      fetch(`${API_BASE}/v1/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+        body: JSON.stringify(payload),
+      })
+        .then((res) => {
+          if (!res.ok) return res.json().then((err) => { throw new Error(err.detail || `Server error ${res.status}`) })
+          return res.json()
+        })
+        .then((data) => {
+          setConversations((prev) => [...prev, { id: Date.now(), user: last.text, assistant: data.reply || '(no response)', timestamp: new Date().toLocaleTimeString() }])
+          setStatus('idle')
+        })
+        .catch((e) => {
+          setError(e.message || 'Request failed')
+          lastFailedRequestRef.current = { type: 'chat', text: last.text }
+          setCanRetry(true)
+          setStatus('idle')
+        })
+      return
+    }
+    lastFailedRequestRef.current = null
+  }, [sendAndPlay, mode, agentName, sessionId])
+
+  const progressStepLabels = {
+    transcribing: 'Transcribing…',
+    thinking: 'Thinking…',
+    generating_speech: 'Generating speech…',
+  }
   const statusLabel =
     status === 'recording'
       ? 'Recording…'
       : status === 'processing'
-        ? 'Processing…'
+        ? (progressStep && progressStepLabels[progressStep]) || 'Processing…'
         : status === 'playing'
           ? 'Playing reply…'
           : 'Hold to talk'
@@ -249,6 +354,15 @@ export default function App() {
             >
               New
             </button>
+            {conversations.length > 0 && (
+              <button
+                className="btn-clear"
+                onClick={clearHistory}
+                aria-label="Clear history"
+              >
+                Clear history
+              </button>
+            )}
             <button
               className="sidebar-close"
               onClick={() => setSidebarOpen(false)}
@@ -414,9 +528,19 @@ export default function App() {
           </button>
         </div>
 
+        {!isOnline && (
+          <div className="offline" role="status">
+            You are offline. Check your connection.
+          </div>
+        )}
         {error && (
           <div className="error" role="alert">
-            {error}
+            <span>{error}</span>
+            {canRetry && (
+              <button type="button" className="btn-retry" onClick={retryLastRequest}>
+                Retry
+              </button>
+            )}
           </div>
         )}
 

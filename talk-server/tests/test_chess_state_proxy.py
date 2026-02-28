@@ -41,8 +41,9 @@ class _FakeAsyncClient:
 
 
 def test_chess_state_proxy(monkeypatch):
+    import httpx
     monkeypatch.setenv("DWANI_AGENT_BASE_URL", "http://agents:8081")
-    monkeypatch.setattr(main.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
     res = client.get("/v1/chess/state")
     assert res.status_code == 200
     body = res.json()

@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 import main
+from routers import chat as chat_router
 
 
 client = TestClient(main.app)
@@ -20,7 +21,7 @@ def test_chat_returns_chess_state_for_chess_agent(monkeypatch):
             },
         }
 
-    monkeypatch.setattr(main, "call_agent", _fake_call_agent)
+    monkeypatch.setattr(chat_router, "call_agent", _fake_call_agent)
     res = client.post(
         "/v1/chat",
         headers={"X-Session-ID": "s-test-chess"},
