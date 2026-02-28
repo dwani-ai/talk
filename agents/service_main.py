@@ -209,8 +209,8 @@ _agents: Dict[str, Runner] = {
 
 
 app = FastAPI(
-    title="Talk Agents Service",
-    description="HTTP wrapper around Google ADK agents for the Talk system.",
+    title="dwani.ai Agents Service",
+    description="HTTP wrapper around Google ADK agents for dwani.ai (Conversational AI Agents for Indian languages).",
     version="0.1.0",
 )
 

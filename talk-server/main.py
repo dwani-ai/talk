@@ -79,7 +79,7 @@ limiter = Limiter(key_func=get_remote_address)
 # FastAPI app setup with enhanced docs
 app = FastAPI(
     title="dwani.ai API",
-    description="A multimodal Inference API designed for Privacy",
+    description="Conversational AI Agents for Indian languages — speech-to-speech, agents, and multimodal inference.",
     version="1.0.0",
     redirect_slashes=False,
     openapi_tags=[

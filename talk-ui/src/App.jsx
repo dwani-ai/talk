@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, NavLink } from 'react-router-dom'
 
 const SESSION_KEY = 'talk_session_id'
 
@@ -308,26 +308,28 @@ export default function App() {
         <header>
           <div className="header-main">
             <div>
-              <h1>Talk</h1>
+              <h1>dwani.ai</h1>
               <p className="tagline">
-                Push to talk · ASR → {mode === 'agent' ? 'Agent' : 'LLM'} → TTS
+                Conversational AI Agents for Indian languages <br />
               </p>
+              <p className="tagline">Push to talk · ASR → {mode === 'agent' ? 'Agent' : 'LLM'} → TTS</p>
             </div>
             <nav className="nav-tabs">
-              <Link to="/" className="nav-tab">
+              <NavLink to="/" className="nav-tab" end>
                 Talk
-              </Link>
-              <Link to="/warehouse" className="nav-tab">
+              </NavLink>
+              <NavLink to="/warehouse" className="nav-tab">
                 Warehouse
-              </Link>
-              <Link to="/chess" className="nav-tab">
+              </NavLink>
+              <NavLink to="/chess" className="nav-tab">
                 Chess
-              </Link>
+              </NavLink>
             </nav>
           </div>
         </header>
 
         <div className="controls">
+          <div className="controls-row">
           <label>
             Language
             <select
@@ -397,6 +399,7 @@ export default function App() {
               <option value="agent_chess">Chess orchestrator</option>
             </select>
           </label>
+          </div>
 
           <button
             className={`mic ${status}`}

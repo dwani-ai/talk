@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 
@@ -450,15 +450,15 @@ export default function ChessView() {
               <p className="tagline">Play chess with agent-driven commands and live board sync.</p>
             </div>
             <nav className="nav-tabs">
-              <Link to="/" className="nav-tab">
+              <NavLink to="/" className="nav-tab" end>
                 Talk
-              </Link>
-              <Link to="/warehouse" className="nav-tab">
+              </NavLink>
+              <NavLink to="/warehouse" className="nav-tab">
                 Warehouse
-              </Link>
-              <Link to="/chess" className="nav-tab">
+              </NavLink>
+              <NavLink to="/chess" className="nav-tab">
                 Chess
-              </Link>
+              </NavLink>
             </nav>
           </div>
         </header>

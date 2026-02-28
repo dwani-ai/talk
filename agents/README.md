@@ -59,6 +59,33 @@ Each example corresponds to a section in the [Google codelab: Build a multi-agen
 
 Run any of the above from this directory after setup. The **Fix my city** agent stores complaints in SQLite (see `fix-my-city/storage.py`); run `python3 test_storage.py` from `fix-my-city/` to run storage tests. The **Orchestrator** agent reuses the same LiteLlm configuration and delegates each request to the appropriate specialist agent.
 
+## Agent mode (in the UI)
+
+The dwani.ai UI can route user turns either:
+
+- **Directly to the LLM** (default), or  
+- **Through an ADK-powered agent** built with Google ADK and LiteLlm.
+
+Currently there are six agents:
+
+- **Travel planner agent** – multi-agent travel-planning assistant.
+- **Viva/voce examiner** – single-agent viva/oral-exam examiner that scores each answer and gives feedback.
+- **Fix my city agent** – register city complaints (city, area, date, time, type, description) and check status of previous complaints; complaints are stored durably in SQLite.
+- **Orchestrator agent** – a smart router that looks at each user turn and delegates it to the travel planner, viva examiner, or fix-my-city agent as appropriate.
+- **Warehouse orchestrator** – controls UAV/UGV/Arm robots and returns `warehouse_state` for the 3D view.
+- **Chess orchestrator** – runs chess commands and returns `chess_state` for the board.
+
+**Travel planner:** When you pick “Travel planner agent” in the UI, the backend does ASR → text, then calls the agents service (`/v1/agents/travel_planner/chat`). The agents service runs the ADK `root_agent` from `travel-planner-sub-agents/agent.py`, which coordinates sub‑agents to help pick a country and plan attractions (state is stored in session). The final agent reply is sent to TTS → audio and played back like normal LLM mode.
+
+**Viva/voce examiner:** When you pick “Viva/voce examiner”, the backend calls `/v1/agents/viva_examiner/chat`. The ADK `root_viva_agent` in `viva-examiner/agent.py` conducts an oral exam: asks short viva questions, scores each answer (0–10) with feedback, and summarizes performance at the end. Reply is sent to TTS → audio.
+
+**Orchestrator:** When you pick “Orchestrator agent”, the backend calls `/v1/agents/orchestrator/chat`. The ADK `root_orchestrator_agent` in `orchestrator/agent.py` inspects each message and forwards it to the appropriate specialist (travel_planner, viva_examiner, or fix_my_city). The specialist’s reply is sent to TTS → audio.
+
+**How it runs:**
+
+- **Docker (host ASR/TTS/LLM):** `compose.yml` and `compose-dev.yml` include an `agents` service built from `agents/Dockerfile`.
+- **Production integrated stack:** `compose-integrated.yml` adds an `agents` service wired to the internal `vllm-server` and exposes it to the backend via `DWANI_AGENT_BASE_URL`.
+
 ## Use with the Talk stack
 
 When you run Talk via Docker, an **agents** container is built from [`agents/Dockerfile`](Dockerfile) and exposes:

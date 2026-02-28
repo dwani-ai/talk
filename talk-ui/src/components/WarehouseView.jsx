@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { Link } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { OrbitControls, Grid } from '@react-three/drei'
 
@@ -182,15 +182,15 @@ export default function WarehouseView() {
               <p className="tagline">Live 3D view of UAV, UGV, and arm state. Commands (e.g. ugv pick item-1) run via the agent and update the view.</p>
             </div>
             <nav className="nav-tabs">
-              <Link to="/" className="nav-tab">
+              <NavLink to="/" className="nav-tab" end>
                 Talk
-              </Link>
-              <Link to="/warehouse" className="nav-tab">
+              </NavLink>
+              <NavLink to="/warehouse" className="nav-tab">
                 Warehouse
-              </Link>
-              <Link to="/chess" className="nav-tab">
+              </NavLink>
+              <NavLink to="/chess" className="nav-tab">
                 Chess
-              </Link>
+              </NavLink>
             </nav>
           </div>
         </header>
