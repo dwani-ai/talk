@@ -3,9 +3,16 @@
 # UI at http://localhost:80 — proxies /v1 to backend
 services:
   talk:
-    image: dwani/talk-server:latest
+    image: dwani/talk-server:${DWANI_TALK_SERVER_TAG:-latest}
     expose:
       - "8000"
+    depends_on:
+      agents:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -18,26 +25,92 @@ services:
       DWANI_API_BASE_URL_LLM: ${DWANI_API_BASE_URL_LLM:-http://host.docker.internal:10802}
       DWANI_LLM_MODEL: ${DWANI_LLM_MODEL:-gemma3}
       DWANI_AGENT_BASE_URL: ${DWANI_AGENT_BASE_URL:-http://agents:8081}
+      DWANI_REDIS_URL: ${DWANI_REDIS_URL:-redis://redis:6379/0}
+      DWANI_DATABASE_URL: ${DWANI_DATABASE_URL:-postgresql+psycopg://talk:talk@postgres:5432/talk}
+      DWANI_API_KEY: ${DWANI_API_KEY:-}
+      DWANI_AUTH_COOKIE_NAME: ${DWANI_AUTH_COOKIE_NAME:-dwani_auth_session}
+      DWANI_AUTH_SESSION_TTL_SECONDS: ${DWANI_AUTH_SESSION_TTL_SECONDS:-86400}
+      DWANI_AUTH_COOKIE_SAMESITE: ${DWANI_AUTH_COOKIE_SAMESITE:-lax}
+      DWANI_AUTH_COOKIE_SECURE: ${DWANI_AUTH_COOKIE_SECURE:-0}
+      DWANI_LLM_API_KEY: ${DWANI_LLM_API_KEY:-dummy}
+      AGENTS_API_KEY: ${AGENTS_API_KEY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
 
   talk-ui:
-    image: dwani/talk-ux:latest
+    image: dwani/talk-ux:${DWANI_TALK_UI_TAG:-latest}
     ports:
       - "80:80"
     depends_on:
-      - talk
+      talk:
+        condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
 
   agents:
+    image: dwani/talk-agents:${DWANI_TALK_AGENTS_TAG:-latest}
     build: ./agents
     expose:
       - "8081"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     environment:
       LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-openai/gemma3}
       LITELLM_API_BASE: ${LITELLM_API_BASE:-https://qwen/v1}
       LITELLM_API_KEY: ${LITELLM_API_KEY}
+      AGENTS_API_KEY: ${AGENTS_API_KEY:-}
+      AGENTS_ALLOWED_ORIGINS: ${AGENTS_ALLOWED_ORIGINS:-http://localhost}
+      AGENTS_REDIS_URL: ${AGENTS_REDIS_URL:-redis://redis:6379/1}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  redis:
+    image: redis:7-alpine
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DWANI_POSTGRES_USER:-talk}
+      POSTGRES_PASSWORD: ${DWANI_POSTGRES_PASSWORD:-talk}
+      POSTGRES_DB: ${DWANI_POSTGRES_DB:-talk}
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DWANI_POSTGRES_USER:-talk} -d ${DWANI_POSTGRES_DB:-talk}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - talk_postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  talk_postgres_data:

@@ -1,12 +1,14 @@
 import asyncio
+import json
 import logging
 import os
 import sys
 from importlib import util as importlib_util
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
 
 from google.adk.runners import Runner
@@ -17,6 +19,11 @@ from warehouse.state_store import get_state as get_warehouse_state_snapshot
 from warehouse.commands import execute_warehouse_command, verify_warehouse_state_after_command
 from warehouse.direct_commands import parse_direct_warehouse_command
 from chess.state_store import get_state as get_chess_state_snapshot
+
+try:
+    import redis
+except Exception:  # pragma: no cover
+    redis = None
 
 # Ensure we can import the travel-planner and viva-examiner agent modules
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -117,8 +124,18 @@ logging.basicConfig(level=logging.INFO)
 
 
 class ChatRequest(BaseModel):
-    session_id: str = Field(..., description="Session identifier from Talk (X-Session-ID).")
-    message: str = Field(..., description="User's latest utterance (already transcribed).")
+    session_id: str = Field(
+        ...,
+        description="Session identifier from Talk (X-Session-ID).",
+        min_length=1,
+        max_length=128,
+    )
+    message: str = Field(
+        ...,
+        description="User's latest utterance (already transcribed).",
+        min_length=1,
+        max_length=4000,
+    )
 
 
 class ChatResponse(BaseModel):
@@ -167,6 +184,7 @@ APP_NAME = os.getenv("AGENTS_APP_NAME", "talk_travel_planner")
 
 _session_service = InMemorySessionService()
 _known_sessions: set[str] = set()
+_REDIS_CLIENT = None
 
 _agents: Dict[str, Runner] = {
     # Root ADK multi-agent for travel planning.
@@ -209,18 +227,132 @@ _agents: Dict[str, Runner] = {
 
 
 app = FastAPI(
-    title="Talk Agents Service",
-    description="HTTP wrapper around Google ADK agents for the Talk system.",
+    title="dwani.ai Agents Service",
+    description="HTTP wrapper around Google ADK agents for dwani.ai (Conversational AI Agents for Indian languages).",
     version="0.1.0",
 )
 
+
+def _parse_allowed_origins() -> list[str]:
+    raw = os.getenv("AGENTS_ALLOWED_ORIGINS", "")
+    parsed = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    if parsed:
+        return parsed
+    return [
+        "https://dwani.ai",
+        "https://talk.dwani.ai",
+        "http://localhost",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+
+def require_agents_api_key(
+    authorization: Optional[str] = Header(default=None),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+) -> None:
+    configured_key = os.getenv("AGENTS_API_KEY", "").strip()
+    if not configured_key:
+        return
+    bearer_key = None
+    if authorization and authorization.lower().startswith("bearer "):
+        bearer_key = authorization[7:].strip()
+    provided = x_api_key or bearer_key
+    if provided != configured_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+def _redis_client():
+    global _REDIS_CLIENT
+    if _REDIS_CLIENT is not None:
+        return _REDIS_CLIENT
+    if redis is None:
+        return None
+    redis_url = os.getenv("AGENTS_REDIS_URL", "").strip()
+    if not redis_url:
+        return None
+    try:
+        _REDIS_CLIENT = redis.Redis.from_url(redis_url, decode_responses=True)
+    except Exception:
+        _REDIS_CLIENT = None
+    return _REDIS_CLIENT
+
+
+def _history_key(agent_name: str, session_id: str) -> str:
+    return f"dwani:agents:{agent_name}:{session_id}"
+
+
+def _load_history(agent_name: str, session_id: str) -> list[dict[str, str]]:
+    client = _redis_client()
+    if client is None:
+        return []
+    try:
+        raw = client.get(_history_key(agent_name, session_id))
+        if not raw:
+            return []
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
+
+
+def _save_history(agent_name: str, session_id: str, history: list[dict[str, str]]) -> None:
+    client = _redis_client()
+    if client is None:
+        return
+    ttl = int(os.getenv("AGENTS_SESSION_TTL_SECONDS", "86400"))
+    try:
+        client.setex(_history_key(agent_name, session_id), ttl, json.dumps(history[-20:]))
+    except Exception:
+        return
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_parse_allowed_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _setup_tracing() -> None:
+    if os.getenv("AGENTS_ENABLE_TRACING", "0") != "1":
+        return
+    try:
+        from opentelemetry import trace
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        endpoint = os.getenv("AGENTS_OTEL_EXPORTER_OTLP_ENDPOINT", "").strip() or None
+        tracer_provider = TracerProvider(resource=Resource.create({"service.name": "talk-agents"}))
+        span_exporter = OTLPSpanExporter(endpoint=endpoint) if endpoint else OTLPSpanExporter()
+        tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
+        trace.set_tracer_provider(tracer_provider)
+        FastAPIInstrumentor.instrument_app(app)
+    except Exception as exc:
+        logger.warning("Tracing setup skipped due to error: %s", exc)
+
+
+def _setup_metrics() -> None:
+    if os.getenv("AGENTS_ENABLE_METRICS", "1") != "1":
+        return
+    Instrumentator(excluded_handlers=["/healthz"]).instrument(app).expose(app, endpoint="/metrics")
+
+
+_setup_tracing()
+_setup_metrics()
+
+
+@app.middleware("http")
+async def add_request_id(request, call_next):
+    request_id = request.headers.get("X-Request-ID") or os.urandom(8).hex()
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 
 @app.get("/healthz")
@@ -285,6 +417,16 @@ def _ensure_session(user_id: str, session_id: str) -> None:
 
 def _run_agent_message(runner: Runner, user_id: str, session_id: str, message: str, agent_name: str = "") -> ChatResponse:
     _ensure_session(user_id=user_id, session_id=session_id)
+    original_message = message
+    history = _load_history(agent_name, session_id) if agent_name else []
+    replay_enabled = os.getenv("AGENTS_REDIS_CONTEXT_REPLAY", "1") == "1"
+    if replay_enabled and history:
+        compact = []
+        for turn in history[-6:]:
+            compact.append(f"User: {turn.get('user', '')}")
+            compact.append(f"Assistant: {turn.get('assistant', '')}")
+        replay_prompt = "\n".join(compact)
+        message = f"Conversation context:\n{replay_prompt}\n\nLatest user message: {message}"
     state_before = get_warehouse_state_snapshot() if agent_name == "warehouse_orchestrator" else None
 
     content = types.Content(role="user", parts=[types.Part(text=message)])
@@ -364,11 +506,14 @@ def _run_agent_message(runner: Runner, user_id: str, session_id: str, message: s
         chess_state = get_chess_state_snapshot()
         if not isinstance(chess_state, dict):
             chess_state = None
+    if agent_name:
+        history.append({"user": original_message, "assistant": reply_text})
+        _save_history(agent_name, session_id, history)
     return ChatResponse(reply=reply_text, state=last_state, warehouse_state=warehouse_state, chess_state=chess_state)
 
 
 @app.post("/v1/agents/{agent_name}/chat", response_model=ChatResponse)
-def chat(agent_name: str, body: ChatRequest) -> ChatResponse:
+def chat(agent_name: str, body: ChatRequest, _: None = Depends(require_agents_api_key)) -> ChatResponse:
     runner = _agents.get(agent_name)
     if not runner:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_name}'")

@@ -1,16 +1,11 @@
-import { useRef, useState, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { useRef, useState, useCallback, useEffect } from 'react'
+import { Link, NavLink } from 'react-router-dom'
+import { sendChatRequest, sendSpeechRequest } from './lib/apiClient'
+import { base64ToBlob } from './lib/audio'
+import { createSessionId, getOrCreateSessionId, loadConversations, saveConversations, setSessionId as persistSessionId } from './lib/session'
+import { useAudioRecorder } from './hooks/useAudioRecorder'
+import { useAuth } from './contexts/AuthContext'
 
-const SESSION_KEY = 'talk_session_id'
-
-function getOrCreateSessionId() {
-  let id = sessionStorage.getItem(SESSION_KEY)
-  if (!id) {
-    id = crypto.randomUUID?.() || `s-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    sessionStorage.setItem(SESSION_KEY, id)
-  }
-  return id
-}
 
 const LANGUAGES = [
   { value: 'kannada', label: 'Kannada' },
@@ -23,40 +18,49 @@ const LANGUAGES = [
   { value: 'german', label: 'German' },
 ]
 
-const API_BASE = import.meta.env.VITE_API_URL || ''
-
-function base64ToBlob(base64, mime) {
-  const byteChars = atob(base64)
-  const byteNumbers = new Array(byteChars.length)
-  for (let i = 0; i < byteChars.length; i++) {
-    byteNumbers[i] = byteChars.charCodeAt(i)
-  }
-  return new Blob([new Uint8Array(byteNumbers)], { type: mime })
-}
+const API_KEY = import.meta.env.VITE_API_KEY || ''
 
 export default function App() {
+  const { currentUser, isAuthenticated, logout } = useAuth()
   const [language, setLanguage] = useState('kannada')
   const [mode, setMode] = useState('agent') // 'llm' or 'agent'
   const [agentName, setAgentName] = useState('orchestrator')
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState(null)
-  const [conversations, setConversations] = useState([])
+  const [conversations, setConversations] = useState(loadConversations)
   const [sidebarOpen, setSidebarOpen] = useState(
     () => typeof window !== 'undefined' && window.innerWidth >= 768
   )
   const [sessionId, setSessionId] = useState(() => getOrCreateSessionId())
   const [typedMessage, setTypedMessage] = useState('')
-  const mediaRecorderRef = useRef(null)
-  const chunksRef = useRef([])
-  const streamRef = useRef(null)
+  const [isOnline, setIsOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true))
+  const [canRetry, setCanRetry] = useState(false)
+  const [progressStep, setProgressStep] = useState(null)
+  const lastFailedRequestRef = useRef(null)
+  const currentAudioRef = useRef(null)
 
-  const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop()
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop())
-      streamRef.current = null
+  useEffect(() => {
+    saveConversations(conversations)
+  }, [conversations])
+
+  useEffect(() => {
+    if (status !== 'processing' || !progressStep) return
+    const steps = ['transcribing', 'thinking', 'generating_speech']
+    const idx = steps.indexOf(progressStep)
+    const next = idx < 0 ? 'thinking' : steps[Math.min(idx + 1, steps.length - 1)]
+    const t = setTimeout(() => setProgressStep(next), 2000)
+    return () => clearTimeout(t)
+  }, [status, progressStep])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onOnline = () => setIsOnline(true)
+    const onOffline = () => setIsOnline(false)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
+    return () => {
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
     }
   }, [])
 
@@ -69,30 +73,16 @@ export default function App() {
       }
       setStatus('processing')
       setError(null)
-      const formData = new FormData()
-      const ext = blob.type.includes('webm') ? 'webm' : 'wav'
-      formData.append('file', blob, `recording.${ext}`)
+      setProgressStep('transcribing')
       try {
-        const isAgent = mode === 'agent'
-        const params = new URLSearchParams({
+        const data = await sendSpeechRequest({
+          blob,
           language,
-          format: 'json',
-          mode: isAgent ? 'agent' : 'llm',
+          mode: mode === 'agent' ? 'agent' : 'llm',
+          agentName,
+          sessionId,
+          apiKey: API_KEY,
         })
-        if (isAgent) {
-          params.set('agent_name', agentName)
-        }
-        const url = `${API_BASE}/v1/speech_to_speech?${params.toString()}`
-        const res = await fetch(url, {
-          method: 'POST',
-          body: formData,
-          headers: { 'X-Session-ID': sessionId },
-        })
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}))
-          throw new Error(err.detail || `Server error ${res.status}`)
-        }
-        const data = await res.json()
         const { transcription, llm_response, audio_base64 } = data
 
         setConversations((prev) => [
@@ -105,67 +95,71 @@ export default function App() {
           },
         ])
 
+        setProgressStep(null)
         const audioBlob = base64ToBlob(audio_base64, 'audio/mp3')
         const audioUrl = URL.createObjectURL(audioBlob)
         const audio = new Audio(audioUrl)
+        currentAudioRef.current = audio
         setStatus('playing')
         audio.onended = () => {
           URL.revokeObjectURL(audioUrl)
+          currentAudioRef.current = null
           setStatus('idle')
         }
         audio.onerror = () => {
           URL.revokeObjectURL(audioUrl)
+          currentAudioRef.current = null
           setStatus('idle')
           setError('Failed to play response')
         }
         await audio.play()
       } catch (e) {
+        setProgressStep(null)
         setError(e.message || 'Request failed')
         setStatus('idle')
+        lastFailedRequestRef.current = { type: 'speech', blob }
+        setCanRetry(true)
       }
     },
     [language, mode, agentName, sessionId]
   )
 
+  const { startRecording, stopRecording } = useAudioRecorder(sendAndPlay)
+
+  useEffect(() => {
+    return () => {
+      stopRecording()
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause()
+        currentAudioRef.current = null
+      }
+    }
+  }, [stopRecording])
+
   const startNewConversation = useCallback(() => {
-    const newId = crypto.randomUUID?.() || `s-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    sessionStorage.setItem(SESSION_KEY, newId)
+    const newId = createSessionId()
+    persistSessionId(newId)
     setSessionId(newId)
     setConversations([])
     setError(null)
+    saveConversations([])
   }, [])
 
-  const onDataAvailable = useCallback((e) => {
-    if (e.data.size > 0) chunksRef.current.push(e.data)
-  }, [])
-
-  const onStop = useCallback(() => {
-    const blob = new Blob(chunksRef.current, { type: 'audio/wav' })
-    chunksRef.current = []
-    sendAndPlay(blob)
-  }, [sendAndPlay])
-
-  const startRecording = useCallback(async () => {
+  const clearHistory = useCallback(() => {
+    setConversations([])
+    saveConversations([])
     setError(null)
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      streamRef.current = stream
-      const recorder = new MediaRecorder(stream)
-      mediaRecorderRef.current = recorder
-      chunksRef.current = []
-      recorder.ondataavailable = onDataAvailable
-      recorder.onstop = onStop
-      recorder.start(200)
-      setStatus('recording')
-    } catch (e) {
-      setError('Microphone access denied or unavailable')
-      setStatus('idle')
-    }
-  }, [onDataAvailable, onStop])
+  }, [])
 
   const handlePointerDown = () => {
     if (status !== 'idle' && status !== 'error') return
+    setError(null)
     startRecording()
+      .then(() => setStatus('recording'))
+      .catch(() => {
+        setError('Microphone access denied or unavailable')
+        setStatus('idle')
+      })
   }
 
   const handlePointerUp = () => {
@@ -173,6 +167,19 @@ export default function App() {
   }
 
   const handlePointerLeave = () => {
+    if (status === 'recording') stopRecording()
+  }
+
+  const handleMicKeyDown = (e) => {
+    if (e.key !== ' ' && e.key !== 'Enter') return
+    e.preventDefault()
+    if (status !== 'idle' && status !== 'error') return
+    handlePointerDown()
+  }
+
+  const handleMicKeyUp = (e) => {
+    if (e.key !== ' ' && e.key !== 'Enter') return
+    e.preventDefault()
     if (status === 'recording') stopRecording()
   }
 
@@ -184,30 +191,13 @@ export default function App() {
     setError(null)
 
     try {
-      const isAgent = mode === 'agent'
-      const payload = {
+      const data = await sendChatRequest({
         text,
-        mode: isAgent ? 'agent' : 'llm',
-      }
-      if (isAgent) {
-        payload.agent_name = agentName
-      }
-
-      const res = await fetch(`${API_BASE}/v1/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Session-ID': sessionId,
-        },
-        body: JSON.stringify(payload),
+        mode: mode === 'agent' ? 'agent' : 'llm',
+        agentName,
+        sessionId,
+        apiKey: API_KEY,
       })
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || `Server error ${res.status}`)
-      }
-
-      const data = await res.json()
       const assistant = data.reply || '(no response)'
 
       setConversations((prev) => [
@@ -224,14 +214,53 @@ export default function App() {
     } catch (e) {
       setError(e.message || 'Request failed')
       setStatus('idle')
+      lastFailedRequestRef.current = { type: 'chat', text: typedMessage.trim() }
+      setCanRetry(true)
     }
   }, [typedMessage, status, mode, agentName, sessionId])
 
+  const retryLastRequest = useCallback(() => {
+    const last = lastFailedRequestRef.current
+    setError(null)
+    setCanRetry(false)
+    if (last?.type === 'speech' && last.blob) {
+      sendAndPlay(last.blob)
+    } else if (last?.type === 'chat' && last.text) {
+      lastFailedRequestRef.current = null
+      setStatus('processing')
+      sendChatRequest({
+        text: last.text,
+        mode: mode === 'agent' ? 'agent' : 'llm',
+        agentName,
+        sessionId,
+        apiKey: API_KEY,
+      })
+        .then((data) => {
+          setConversations((prev) => [...prev, { id: Date.now(), user: last.text, assistant: data.reply || '(no response)', timestamp: new Date().toLocaleTimeString() }])
+          setTypedMessage('')
+          setStatus('idle')
+        })
+        .catch((e) => {
+          setError(e.message || 'Request failed')
+          lastFailedRequestRef.current = { type: 'chat', text: last.text }
+          setCanRetry(true)
+          setStatus('idle')
+        })
+      return
+    }
+    lastFailedRequestRef.current = null
+  }, [sendAndPlay, mode, agentName, sessionId])
+
+  const progressStepLabels = {
+    transcribing: 'Transcribing…',
+    thinking: 'Thinking…',
+    generating_speech: 'Generating speech…',
+  }
   const statusLabel =
     status === 'recording'
       ? 'Recording…'
       : status === 'processing'
-        ? 'Processing…'
+        ? (progressStep && progressStepLabels[progressStep]) || 'Processing…'
         : status === 'playing'
           ? 'Playing reply…'
           : 'Hold to talk'
@@ -249,6 +278,15 @@ export default function App() {
             >
               New
             </button>
+            {conversations.length > 0 && (
+              <button
+                className="btn-clear"
+                onClick={clearHistory}
+                aria-label="Clear history"
+              >
+                Clear history
+              </button>
+            )}
             <button
               className="sidebar-close"
               onClick={() => setSidebarOpen(false)}
@@ -278,7 +316,9 @@ export default function App() {
           )}
         </div>
         <div className="conversation-input">
+          <label htmlFor="typed-message" className="sr-only">Type message</label>
           <textarea
+            id="typed-message"
             rows={2}
             placeholder="Type your message…"
             value={typedMessage}
@@ -307,27 +347,44 @@ export default function App() {
 
         <header>
           <div className="header-main">
-            <div>
-              <h1>Talk</h1>
+            <div className="header-brand">
+              <h1>dwani.ai</h1>
               <p className="tagline">
-                Push to talk · ASR → {mode === 'agent' ? 'Agent' : 'LLM'} → TTS
+                Conversational AI Agents for Indian languages <br />
               </p>
+              <p className="tagline">Push to talk · ASR → {mode === 'agent' ? 'Agent' : 'LLM'} → TTS</p>
             </div>
-            <nav className="nav-tabs">
-              <Link to="/" className="nav-tab">
-                Talk
-              </Link>
-              <Link to="/warehouse" className="nav-tab">
-                Warehouse
-              </Link>
-              <Link to="/chess" className="nav-tab">
-                Chess
-              </Link>
-            </nav>
+            <div className="header-actions">
+              <nav className="nav-tabs">
+                <NavLink to="/" className="nav-tab" end>
+                  Talk
+                </NavLink>
+                <NavLink to="/warehouse" className="nav-tab">
+                  Warehouse
+                </NavLink>
+                <NavLink to="/chess" className="nav-tab">
+                  Chess
+                </NavLink>
+              </nav>
+              <div className="auth-nav">
+                {isAuthenticated ? (
+                  <>
+                    <span className="auth-email" title={currentUser?.email}>{currentUser?.email}</span>
+                    <button type="button" className="auth-btn" onClick={logout}>Log out</button>
+                  </>
+                ) : (
+                  <>
+                    <Link to="/login" className="auth-link">Log in</Link>
+                    <Link to="/signup" className="auth-link auth-link-primary">Sign up</Link>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
         </header>
 
         <div className="controls">
+          <div className="controls-row">
           <label>
             Language
             <select
@@ -397,23 +454,49 @@ export default function App() {
               <option value="agent_chess">Chess orchestrator</option>
             </select>
           </label>
+          </div>
+
+          <div className="voice-stage">
+            <div className={`voice-status ${status}`}>
+              <span className="voice-status-label">Voice status</span>
+              <strong>{statusLabel}</strong>
+              <div className="voice-pipeline">
+                <span className={progressStep === 'transcribing' ? 'active' : ''}>ASR</span>
+                <span className={progressStep === 'thinking' ? 'active' : ''}>Agent</span>
+                <span className={progressStep === 'generating_speech' ? 'active' : ''}>TTS</span>
+              </div>
+            </div>
 
           <button
             className={`mic ${status}`}
             onPointerDown={handlePointerDown}
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerLeave}
+            onKeyDown={handleMicKeyDown}
+            onKeyUp={handleMicKeyUp}
             disabled={status === 'processing'}
             aria-label={statusLabel}
           >
             <span className="icon">{status === 'recording' ? '⏹' : '🎤'}</span>
             <span className="label">{statusLabel}</span>
           </button>
+          <p className="voice-hint">Hold to speak, release to get a spoken reply.</p>
+          </div>
         </div>
 
+        {!isOnline && (
+          <div className="offline" role="status" aria-live="polite">
+            You are offline. Check your connection.
+          </div>
+        )}
         {error && (
-          <div className="error" role="alert">
-            {error}
+          <div className="error" role="alert" aria-live="assertive">
+            <span>{error}</span>
+            {canRetry && (
+              <button type="button" className="btn-retry" onClick={retryLastRequest}>
+                Retry
+              </button>
+            )}
           </div>
         )}
 

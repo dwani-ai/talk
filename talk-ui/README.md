@@ -1,6 +1,6 @@
-# Talk UI
+# dwani.ai UI
 
-Simple push-to-talk React app for the Talk (speech-to-speech) backend.
+React frontend for dwani.ai — Conversational AI Agents for Indian languages. Push-to-talk speech-to-speech and agent chat.
 
 - **Hold** the button to record, **release** to send. The backend returns an MP3 reply and it plays automatically.
 - Choose **language**: Kannada, Hindi, or Tamil.
