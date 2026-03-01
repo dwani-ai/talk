@@ -86,6 +86,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+    environment:
+      TTS_NFE_STEPS: 8
     deploy:
       resources:
         reservations:
