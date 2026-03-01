@@ -337,16 +337,7 @@ export default function App() {
       </aside>
 
       <main className="main">
-        <button
-          className="sidebar-toggle"
-          onClick={() => setSidebarOpen(true)}
-          aria-label="Open conversations"
-          title="View conversations"
-        >
-          💬 {conversations.length > 0 && <span className="badge">{conversations.length}</span>}
-        </button>
-
-        <header>
+        <header className="main-header">
           <div className="header-main">
             <div className="header-brand">
               <h1>dwani.ai</h1>
@@ -360,6 +351,14 @@ export default function App() {
                 title="Settings"
               >
                 ⚙️
+              </button>
+              <button
+                className="sidebar-toggle"
+                onClick={() => setSidebarOpen(true)}
+                aria-label="Open conversations"
+                title="View conversations"
+              >
+                💬 {conversations.length > 0 && <span className="badge">{conversations.length}</span>}
               </button>
             </div>
           </div>

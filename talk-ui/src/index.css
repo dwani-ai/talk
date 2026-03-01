@@ -265,11 +265,8 @@ body {
   cursor: not-allowed;
 }
 
-/* Sidebar toggle FAB */
+/* Sidebar toggle: in-header (Talk page) or standalone */
 .sidebar-toggle {
-  position: fixed;
-  top: 1.25rem;
-  right: 1.25rem;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   color: var(--text-primary);
@@ -279,12 +276,16 @@ body {
   font-weight: 500;
   font-family: var(--font);
   cursor: pointer;
-  z-index: 50;
   display: flex;
   align-items: center;
   gap: 0.4rem;
   box-shadow: var(--shadow-sm);
   transition: background 0.15s, border-color 0.15s;
+}
+
+/* When inside header, flow with the row (no fixed positioning) */
+.main-header .sidebar-toggle {
+  position: static;
 }
 
 .sidebar-toggle:hover {
@@ -319,32 +320,34 @@ header {
   max-width: 560px;
 }
 
-header .header-main {
+.main-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 1.5rem;
-  flex-wrap: nowrap;
+  justify-content: center;
+  width: 100%;
 }
 
-@media (max-width: 640px) {
-  header .header-main {
-    flex-direction: column;
-    align-items: flex-start;
-  }
+header .header-main {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  width: 100%;
+  gap: 1rem;
 }
 
 .header-brand {
+  grid-column: 2;
+  justify-self: center;
   min-width: 0;
 }
 
 .header-actions {
+  grid-column: 3;
+  justify-self: end;
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  margin-left: auto;
+  flex-wrap: nowrap;
 }
 
 header h1 {
@@ -825,6 +828,11 @@ footer small {
 }
 
 @media (max-width: 640px) {
+  .main-header .header-actions {
+    width: auto;
+    justify-content: flex-end;
+  }
+
   .header-actions {
     width: 100%;
     justify-content: flex-start;
@@ -849,10 +857,6 @@ footer small {
   .auth-email {
     width: 100%;
     max-width: none;
-  }
-
-  .settings-toggle {
-    margin-bottom: -0.5rem;
   }
 
   .controls-settings-wrap .controls-row {
