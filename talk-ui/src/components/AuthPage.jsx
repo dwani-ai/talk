@@ -10,6 +10,7 @@ export default function AuthPage({ mode }) {
   const [password, setPassword] = useState('')
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState(null)
+  const [menuOpen, setMenuOpen] = useState(false)
 
   const onSubmit = async (e) => {
     e.preventDefault()
@@ -33,23 +34,68 @@ export default function AuthPage({ mode }) {
   return (
     <div className="app">
       <main className="main auth-main">
+        <div
+          className={`controls-settings-wrap ${menuOpen ? 'open' : ''}`}
+          onClick={(e) => e.target === e.currentTarget && setMenuOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Menu"
+        >
+          <button
+            type="button"
+            className="settings-close"
+            onClick={() => setMenuOpen(false)}
+            aria-label="Close menu"
+          >
+            ×
+          </button>
+          <nav className="settings-nav">
+            <NavLink to="/" className="nav-tab" end onClick={() => setMenuOpen(false)}>
+              Talk
+            </NavLink>
+            <NavLink to="/warehouse" className="nav-tab" onClick={() => setMenuOpen(false)}>
+              Warehouse
+            </NavLink>
+            <NavLink to="/chess" className="nav-tab" onClick={() => setMenuOpen(false)}>
+              Chess
+            </NavLink>
+          </nav>
+          <div className="settings-auth">
+            {isSignup ? (
+              <Link to="/login" className="auth-link" onClick={() => setMenuOpen(false)}>Log in</Link>
+            ) : (
+              <Link to="/signup" className="auth-link auth-link-primary" onClick={() => setMenuOpen(false)}>Sign up</Link>
+            )}
+          </div>
+        </div>
         <header>
           <div className="header-main">
             <div>
               <h1>dwani.ai</h1>
               <p className="tagline">Optional account login for persistent identity.</p>
             </div>
-            <nav className="nav-tabs">
-              <NavLink to="/" className="nav-tab" end>
-                Talk
-              </NavLink>
-              <NavLink to="/warehouse" className="nav-tab">
-                Warehouse
-              </NavLink>
-              <NavLink to="/chess" className="nav-tab">
-                Chess
-              </NavLink>
-            </nav>
+            <div className="header-actions header-actions-auth">
+              <button
+                type="button"
+                className="settings-toggle"
+                onClick={() => setMenuOpen(true)}
+                aria-label="Open menu"
+                title="Menu"
+              >
+                ☰
+              </button>
+              <nav className="nav-tabs">
+                <NavLink to="/" className="nav-tab" end>
+                  Talk
+                </NavLink>
+                <NavLink to="/warehouse" className="nav-tab">
+                  Warehouse
+                </NavLink>
+                <NavLink to="/chess" className="nav-tab">
+                  Chess
+                </NavLink>
+              </nav>
+            </div>
           </div>
         </header>
 
