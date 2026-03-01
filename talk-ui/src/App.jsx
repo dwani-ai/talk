@@ -264,7 +264,7 @@ export default function App() {
         ? (progressStep && progressStepLabels[progressStep]) || 'Processing…'
         : status === 'playing'
           ? 'Playing reply…'
-          : 'Hold to talk'
+          : 'hold to speak'
 
   return (
     <div className="app">
@@ -406,21 +406,6 @@ export default function App() {
             </div>
             <div className="controls-row">
               <label>
-                Language
-                <select
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  disabled={status !== 'idle'}
-                >
-                  {LANGUAGES.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
                 Mode
                 <select
                   value={
@@ -477,11 +462,10 @@ export default function App() {
             </div>
           </div>
 
-          <div className="voice-stage">
-            <div className={`voice-status ${status}`}>
-              <span className="voice-status-label">Voice status</span>
-              <strong>{statusLabel}</strong>
-              <div className="voice-pipeline">
+          <div className="voice-stage" >
+            <div className={`voice-status ${status}`} style={{ display: 'none' }}>
+
+              <div className="voice-pipeline" >
                 <span className={progressStep === 'transcribing' ? 'active' : ''}>ASR</span>
                 <span className={progressStep === 'thinking' ? 'active' : ''}>Agent</span>
                 <span className={progressStep === 'generating_speech' ? 'active' : ''}>TTS</span>
@@ -522,10 +506,24 @@ export default function App() {
         )}
 
         <footer>
-          <small>Hold the button, speak, then release to get a reply.</small>
+
           <button className="btn-new-inline" onClick={startNewConversation}>
             New conversation
           </button>
+          <label className="footer-language">
+            Language
+            <select
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              disabled={status !== 'idle'}
+            >
+              {LANGUAGES.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </footer>
       </main>
     </div>
