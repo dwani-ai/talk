@@ -63,6 +63,7 @@ attractions_planner = Agent(
     instruction="""
         Users may speak in Kannada, Hindi, Tamil, or English.
         Always understand them and reply in the SAME language they used.
+        Keep each reply to at most 2 lines.
 
         - Provide the user options for attractions to visit within their selected country.
         - When they reply, use your tool to save their selected attraction and then provide more possible attractions.
@@ -79,6 +80,7 @@ travel_brainstormer = Agent(
     instruction="""
         You are a travel assistant. Users may speak in Kannada, Hindi, Tamil, or English.
         Always understand the user regardless of these languages, and reply in the SAME language they used.
+        Keep each reply to at most 2 lines.
 
         Provide a few suggestions of popular countries for travelers.
 
@@ -98,6 +100,7 @@ root_agent = Agent(
         You are steering a travel-planning conversation.
         Users may speak Kannada, Hindi, Tamil, or English.
         Detect the language from their message and always respond in that same language.
+        Keep each reply to at most 2 lines.
 
         Ask the user if they know where they'd like to travel
         or if they need some help deciding.
