@@ -31,6 +31,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(
     () => typeof window !== 'undefined' && window.innerWidth >= 768
   )
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [sessionId, setSessionId] = useState(() => getOrCreateSessionId())
   const [typedMessage, setTypedMessage] = useState('')
   const [isOnline, setIsOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true))
@@ -349,111 +350,132 @@ export default function App() {
           <div className="header-main">
             <div className="header-brand">
               <h1>dwani.ai</h1>
-              <p className="tagline">
-                Conversational AI Agents for Indian languages <br />
-              </p>
-              <p className="tagline">Push to talk · ASR → {mode === 'agent' ? 'Agent' : 'LLM'} → TTS</p>
             </div>
             <div className="header-actions">
-              <nav className="nav-tabs">
-                <NavLink to="/" className="nav-tab" end>
-                  Talk
-                </NavLink>
-                <NavLink to="/warehouse" className="nav-tab">
-                  Warehouse
-                </NavLink>
-                <NavLink to="/chess" className="nav-tab">
-                  Chess
-                </NavLink>
-              </nav>
-              <div className="auth-nav">
-                {isAuthenticated ? (
-                  <>
-                    <span className="auth-email" title={currentUser?.email}>{currentUser?.email}</span>
-                    <button type="button" className="auth-btn" onClick={logout}>Log out</button>
-                  </>
-                ) : (
-                  <>
-                    <Link to="/login" className="auth-link">Log in</Link>
-                    <Link to="/signup" className="auth-link auth-link-primary">Sign up</Link>
-                  </>
-                )}
-              </div>
+              <button
+                type="button"
+                className="settings-toggle"
+                onClick={() => setSettingsOpen(true)}
+                aria-label="Open settings"
+                title="Settings"
+              >
+                ⚙️
+              </button>
             </div>
           </div>
         </header>
 
         <div className="controls">
-          <div className="controls-row">
-          <label>
-            Language
-            <select
-              value={language}
-              onChange={(e) => setLanguage(e.target.value)}
-              disabled={status !== 'idle'}
+          <div
+            className={`controls-settings-wrap ${settingsOpen ? 'open' : ''}`}
+            onClick={(e) => e.target === e.currentTarget && setSettingsOpen(false)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Settings"
+          >
+            <button
+              type="button"
+              className="settings-close"
+              onClick={() => setSettingsOpen(false)}
+              aria-label="Close settings"
             >
-              {LANGUAGES.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              ×
+            </button>
+            <nav className="settings-nav">
+              <NavLink to="/" className="nav-tab" end onClick={() => setSettingsOpen(false)}>
+                Talk
+              </NavLink>
+              <NavLink to="/warehouse" className="nav-tab" onClick={() => setSettingsOpen(false)}>
+                Warehouse
+              </NavLink>
+              <NavLink to="/chess" className="nav-tab" onClick={() => setSettingsOpen(false)}>
+                Chess
+              </NavLink>
+            </nav>
+            <div className="settings-auth">
+              {isAuthenticated ? (
+                <>
+                  <span className="auth-email" title={currentUser?.email}>{currentUser?.email}</span>
+                  <button type="button" className="auth-btn" onClick={() => { setSettingsOpen(false); logout() }}>Log out</button>
+                </>
+              ) : (
+                <>
+                  <Link to="/login" className="auth-link" onClick={() => setSettingsOpen(false)}>Log in</Link>
+                  <Link to="/signup" className="auth-link auth-link-primary" onClick={() => setSettingsOpen(false)}>Sign up</Link>
+                </>
+              )}
+            </div>
+            <div className="controls-row">
+              <label>
+                Language
+                <select
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  disabled={status !== 'idle'}
+                >
+                  {LANGUAGES.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-          <label>
-            Mode
-            <select
-              value={
-                mode === 'llm'
-                  ? 'llm'
-                  : agentName === 'viva_examiner'
-                    ? 'agent_viva'
-                    : agentName === 'fix_my_city'
-                      ? 'agent_fix_my_city'
-                      : agentName === 'warehouse_orchestrator'
-                        ? 'agent_warehouse'
-                        : agentName === 'chess_orchestrator'
-                          ? 'agent_chess'
-                        : agentName === 'orchestrator'
-                          ? 'agent_orchestrator'
-                          : 'agent_travel'
-              }
-              onChange={(e) => {
-                const value = e.target.value
-                if (value === 'llm') {
-                  setMode('llm')
-                  setAgentName('travel_planner')
-                } else if (value === 'agent_travel') {
-                  setMode('agent')
-                  setAgentName('travel_planner')
-                } else if (value === 'agent_viva') {
-                  setMode('agent')
-                  setAgentName('viva_examiner')
-                } else if (value === 'agent_fix_my_city') {
-                  setMode('agent')
-                  setAgentName('fix_my_city')
-                } else if (value === 'agent_orchestrator') {
-                  setMode('agent')
-                  setAgentName('orchestrator')
-                } else if (value === 'agent_warehouse') {
-                  setMode('agent')
-                  setAgentName('warehouse_orchestrator')
-                } else if (value === 'agent_chess') {
-                  setMode('agent')
-                  setAgentName('chess_orchestrator')
-                }
-              }}
-              disabled={status !== 'idle'}
-            >
-              <option value="llm">Chatbot (LLM)</option>
-              <option value="agent_travel">Travel planner agent</option>
-              <option value="agent_viva">Viva/voce examiner</option>
-              <option value="agent_fix_my_city">Fix my city agent</option>
-              <option value="agent_orchestrator">All-in-one assistant</option>
-              <option value="agent_warehouse">Warehouse robots (UAV / UGV / Arm)</option>
-              <option value="agent_chess">Chess orchestrator</option>
-            </select>
-          </label>
+              <label>
+                Mode
+                <select
+                  value={
+                    mode === 'llm'
+                      ? 'llm'
+                      : agentName === 'viva_examiner'
+                        ? 'agent_viva'
+                        : agentName === 'fix_my_city'
+                          ? 'agent_fix_my_city'
+                          : agentName === 'warehouse_orchestrator'
+                            ? 'agent_warehouse'
+                            : agentName === 'chess_orchestrator'
+                              ? 'agent_chess'
+                              : agentName === 'orchestrator'
+                                ? 'agent_orchestrator'
+                                : 'agent_travel'
+                  }
+                  onChange={(e) => {
+                    const value = e.target.value
+                    if (value === 'llm') {
+                      setMode('llm')
+                      setAgentName('travel_planner')
+                    } else if (value === 'agent_travel') {
+                      setMode('agent')
+                      setAgentName('travel_planner')
+                    } else if (value === 'agent_viva') {
+                      setMode('agent')
+                      setAgentName('viva_examiner')
+                    } else if (value === 'agent_fix_my_city') {
+                      setMode('agent')
+                      setAgentName('fix_my_city')
+                    } else if (value === 'agent_orchestrator') {
+                      setMode('agent')
+                      setAgentName('orchestrator')
+                    } else if (value === 'agent_warehouse') {
+                      setMode('agent')
+                      setAgentName('warehouse_orchestrator')
+                    } else if (value === 'agent_chess') {
+                      setMode('agent')
+                      setAgentName('chess_orchestrator')
+                    }
+                  }}
+                  disabled={status !== 'idle'}
+                >
+                  <option value="llm">Chatbot (LLM)</option>
+                  <option value="agent_travel">Travel planner agent</option>
+                  <option value="agent_viva">Viva/voce examiner</option>
+                  <option value="agent_fix_my_city">Fix my city agent</option>
+                  <option value="agent_orchestrator">All-in-one assistant</option>
+                  <option value="agent_warehouse">Warehouse robots (UAV / UGV / Arm)</option>
+                  <option value="agent_chess">Chess orchestrator</option>
+                </select>
+              </label>
+            </div>
           </div>
 
           <div className="voice-stage">

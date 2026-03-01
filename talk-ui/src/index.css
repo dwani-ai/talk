@@ -405,6 +405,101 @@ header h1 {
   margin-top: 0.5rem;
 }
 
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 1.25rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.settings-toggle:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-card);
+}
+
+.settings-close {
+  display: flex;
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.settings-close:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-card);
+}
+
+/* Settings/menu panel: overlay for all viewports (desktop + mobile) */
+.controls-settings-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--bg-base);
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 2rem;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.controls-settings-wrap.open {
+  display: flex;
+  opacity: 1;
+}
+
+.controls-settings-wrap .settings-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  justify-content: center;
+}
+
+.controls-settings-wrap .settings-nav .nav-tab {
+  min-width: 100px;
+}
+
+.controls-settings-wrap .settings-auth {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+/* Hide nav and auth in header; they live in the settings/menu panel */
+header .nav-tabs {
+  display: none !important;
+}
+
+header .auth-nav {
+  display: none !important;
+}
+
 .controls-row {
   display: flex;
   flex-wrap: wrap;
@@ -754,6 +849,15 @@ footer small {
   .auth-email {
     width: 100%;
     max-width: none;
+  }
+
+  .settings-toggle {
+    margin-bottom: -0.5rem;
+  }
+
+  .controls-settings-wrap .controls-row {
+    flex-direction: column;
+    gap: 1.25rem;
   }
 }
 
