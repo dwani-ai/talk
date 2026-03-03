@@ -319,6 +319,7 @@ export default function ChessView() {
   const [captureFx, setCaptureFx] = useState(null)
   const [pendingCaptureFx, setPendingCaptureFx] = useState(null)
   const [moveFx, setMoveFx] = useState(null)
+  const [menuOpen, setMenuOpen] = useState(false)
   const historyLenRef = useRef(0)
 
   const applyState = useCallback((data) => {
@@ -450,6 +451,46 @@ export default function ChessView() {
   return (
     <div className="app">
       <main className="main warehouse-main">
+        <div
+          className={`controls-settings-wrap ${menuOpen ? 'open' : ''}`}
+          onClick={(e) => e.target === e.currentTarget && setMenuOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Menu"
+        >
+          <button
+            type="button"
+            className="settings-close"
+            onClick={() => setMenuOpen(false)}
+            aria-label="Close menu"
+          >
+            ×
+          </button>
+          <nav className="settings-nav">
+            <NavLink to="/" className="nav-tab" end onClick={() => setMenuOpen(false)}>
+              Talk
+            </NavLink>
+            <NavLink to="/warehouse" className="nav-tab" onClick={() => setMenuOpen(false)}>
+              Warehouse
+            </NavLink>
+            <NavLink to="/chess" className="nav-tab" onClick={() => setMenuOpen(false)}>
+              Chess
+            </NavLink>
+          </nav>
+          <div className="settings-auth">
+            {isAuthenticated ? (
+              <>
+                <span className="auth-email" title={currentUser?.email}>{currentUser?.email}</span>
+                <button type="button" className="auth-btn" onClick={() => { setMenuOpen(false); logout() }}>Log out</button>
+              </>
+            ) : (
+              <>
+                <Link to="/login" className="auth-link" onClick={() => setMenuOpen(false)}>Log in</Link>
+                <Link to="/signup" className="auth-link auth-link-primary" onClick={() => setMenuOpen(false)}>Sign up</Link>
+              </>
+            )}
+          </div>
+        </div>
         <header>
           <div className="header-main">
             <div className="header-brand">
@@ -457,6 +498,15 @@ export default function ChessView() {
               <p className="tagline">Play chess with agent-driven commands and live board sync.</p>
             </div>
             <div className="header-actions">
+              <button
+                type="button"
+                className="settings-toggle"
+                onClick={() => setMenuOpen(true)}
+                aria-label="Open menu"
+                title="Menu"
+              >
+                ☰
+              </button>
               <nav className="nav-tabs">
                 <NavLink to="/" className="nav-tab" end>
                   Talk
