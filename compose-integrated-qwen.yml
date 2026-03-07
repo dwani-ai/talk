@@ -105,7 +105,6 @@ services:
       "--gpu-memory-utilization", "0.9",
       "--tensor-parallel-size", "1",
       "--max-model-len", "8192",
-      "--dtype", "bfloat16",
       "--enable-chunked-prefill",
       "--enable-prefix-caching",
       "--max-num-batched-tokens", "8192",
