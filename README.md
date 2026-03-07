@@ -24,8 +24,13 @@ Try it: [talk.dwani.ai](https://talk.dwani.ai)
 **Docker (backend + UI in containers; ASR/TTS/LLM on host):**  
 Copy `.env.example` to `.env`, set `DWANI_API_BASE_URL_*` if needed (defaults use `host.docker.internal:10803/10804/10802`). Run `docker compose up -d`. Open http://localhost.
 
-**Integrated stack (TTS + LLM in compose; ASR on host):**  
+**Integrated stack (TTS + LLM + ASR in compose; ASR):**  
+> 16 GB VRAM - GPU on server
 Run `docker compose -f compose-integrated-qwen.yml up -d`. Needs GPU. Open http://localhost.
+
+> 6GB < 16 GB VRAM - GPU on laptop
+Run `docker compose -f compose-integrated-qwen-local.yml up -d`. Needs GPU. Open http://localhost.
+
 
 **Local Python (no UI):**  
 Export `DWANI_API_BASE_URL_ASR`, `DWANI_API_BASE_URL_TTS`, `DWANI_API_BASE_URL_LLM`. Then `cd talk-server && pip install -r requirements.txt && python main.py`. API at http://localhost:8000.

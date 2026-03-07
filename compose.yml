@@ -62,12 +62,6 @@ services:
     build: ./agents
     expose:
       - "8081"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/healthz')"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
     environment:
       LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-openai/gemma3}
       LITELLM_API_BASE: ${LITELLM_API_BASE:-https://qwen/v1}
@@ -75,6 +69,14 @@ services:
       AGENTS_API_KEY: ${AGENTS_API_KEY:-}
       AGENTS_ALLOWED_ORIGINS: ${AGENTS_ALLOWED_ORIGINS:-http://localhost}
       AGENTS_REDIS_URL: ${AGENTS_REDIS_URL:-redis://redis:6379/1}
+    volumes:
+      - fix_my_city_data:/app/fix-my-city/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -113,4 +115,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  fix_my_city_data:
   talk_postgres_data:

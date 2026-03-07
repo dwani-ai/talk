@@ -34,6 +34,7 @@ async def call_llm(
             messages=messages,
             max_tokens=256,
             extra_headers={"X-Request-ID": request_id} if request_id else None,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
     except OpenAIAPIError as e:
         logger.error(f"LLM API error: {e}")
@@ -41,7 +42,12 @@ async def call_llm(
     except Exception as e:
         logger.error(f"LLM request failed: {e}")
         raise HTTPException(status_code=502, detail=f"LLM error: {str(e)}")
-    content = response.choices[0].message.content if response.choices else None
+    if not response.choices:
+        raise HTTPException(status_code=502, detail="LLM returned no choices")
+    msg = response.choices[0].message
+    content = getattr(msg, "content", None) or None
+    if not content or not str(content).strip():
+        content = getattr(msg, "reasoning", None) or getattr(msg, "reasoning_content", None)
     if not content or not str(content).strip():
         raise HTTPException(status_code=502, detail="LLM returned empty response")
     return " ".join(str(content).strip().split())
