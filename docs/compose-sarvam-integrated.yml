@@ -15,10 +15,8 @@ services:
               count: all
               capabilities: [gpu]
     command: >
-      --model /models/sarvam-30b-gguf/sarvam-30b-Q4_K_M.gguf-00001-of-00006.gguf
+      --model /models/sarvam-30b-Q4_K_M.gguf-00001-of-00006.gguf
       --ctx-size 4096
       --n-gpu-layers 99
       --host 0.0.0.0
       --port 8080
-      --system-prompt "You are a helpful assistant."
-      --conversation
