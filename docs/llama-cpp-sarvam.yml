@@ -1,5 +1,4 @@
 services:
-
   llama-server:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
     container_name: sarvam-30b-server
@@ -22,4 +21,3 @@ services:
       --host 0.0.0.0
       --port 8080
       --jinja
-      --reasoning-budget 0 
