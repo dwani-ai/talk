@@ -1,5 +1,8 @@
 # dwani.ai — Conversational AI Agents for Indian languages
 
+<!-- 
+export LITELLM_API_KEY="some-thing-here"
+-->
 **Conversational AI agents for Indian languages.**  
 Try it: [talk.dwani.ai](https://talk.dwani.ai)
 
