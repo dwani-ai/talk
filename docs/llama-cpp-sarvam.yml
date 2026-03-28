@@ -4,7 +4,7 @@ services:
     container_name: sarvam-30b-server
     restart: unless-stopped
     ports:
-      - "10802:8080"
+      - "80:8080"
     volumes:
       - ./models:/models
     deploy:
