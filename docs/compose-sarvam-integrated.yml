@@ -26,7 +26,7 @@ services:
       DWANI_API_BASE_URL_TTS: http://tts-indic-server:10804
       DWANI_API_BASE_URL_ASR: http://asr-indic-server:10803
       DWANI_API_BASE_URL_LLM: http://llama-server:8080
-      DWANI_LLM_MODEL: ${DWANI_LLM_MODEL:-sarvam}
+      DWANI_LLM_MODEL: ${DWANI_LLM_MODEL:-gemma3}
       DWANI_AGENT_BASE_URL: http://agents:8081
       DWANI_REDIS_URL: ${DWANI_REDIS_URL:-redis://redis:6379/0}
       DWANI_DATABASE_URL: ${DWANI_DATABASE_URL:-postgresql+psycopg://talk:talk@postgres:5432/talk}
@@ -121,6 +121,7 @@ services:
       --host 0.0.0.0
       --port 8080
       --jinja
+      --alias gemma3
   agents:
     image: dwani/talk-agents:${DWANI_TALK_AGENTS_TAG:-latest}
     expose:
@@ -128,7 +129,7 @@ services:
     depends_on:
       - llama-server
     environment:
-      LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-openai/sarvam-30b-Q4_K_M.gguf-00001-of-00006.gguf}
+      LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-openai/gemma3}
       LITELLM_API_BASE: http://llama-server:8080/v1
       LITELLM_API_KEY: ${LITELLM_API_KEY}
       AGENTS_API_KEY: ${AGENTS_API_KEY:-}
