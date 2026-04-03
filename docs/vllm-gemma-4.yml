@@ -1,6 +1,6 @@
 services:
   vllm-server:
-    image: vllm/vllm-openai:latest
+    image: vllm/vllm-openai:gemma4
     environment:
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
     command: [
