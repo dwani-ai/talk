@@ -2,7 +2,7 @@ Sarvam Integration
 
 python3.10 -m venv venv
 source venv/bin/activate
-
+mkdir models
 pip install hf_cli
 
 hf download sarvamai/sarvam-30b-gguf --local-dir models

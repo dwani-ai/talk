@@ -1,5 +1,5 @@
-# Integrated stack: TTS (tts-indic-server), ASR (asr-indic-server), LLM (llama-server / Sarvam GGUF).
-# Copy .env.example to .env. UI at http://localhost:80 — proxies /v1 to backend. LLM API on host :10802.
+# Integrated stack: TTS, LLM (vllm-server, OpenAI-compatible on host :10802).
+# Copy .env.example to .env. UI at http://localhost:80 — proxies /v1 to backend.
 services:
   talk:
     image: dwani/talk-server:${DWANI_TALK_SERVER_TAG:-latest}
@@ -8,7 +8,7 @@ services:
     depends_on:
       tts-indic-server:
         condition: service_started
-      llama-server:
+      vllm-server:
         condition: service_started
       agents:
         condition: service_healthy
@@ -24,8 +24,7 @@ services:
       start_period: 5s
     environment:
       DWANI_API_BASE_URL_TTS: http://tts-indic-server:10804
-      DWANI_API_BASE_URL_ASR: http://asr-indic-server:10803
-      DWANI_API_BASE_URL_LLM: http://llama-server:8080
+      DWANI_API_BASE_URL_LLM: http://vllm-server:10802
       DWANI_LLM_MODEL: ${DWANI_LLM_MODEL:-gemma3}
       DWANI_AGENT_BASE_URL: http://agents:8081
       DWANI_REDIS_URL: ${DWANI_REDIS_URL:-redis://redis:6379/0}
@@ -60,25 +59,6 @@ services:
           cpus: "1.0"
           memory: 512M
 
-  asr-indic-server:
-    image: dwani/asr-indic-server:latest
-    volumes:
-      - ~/.cache/huggingface:/root/.cache/huggingface
-    ports:
-      - 10803:10803
-    environment:
-      - HF_TOKEN
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ['0']
-              capabilities: [gpu]
-
   tts-indic-server:
     image: dwani/tts-indic-server:latest
     volumes:
@@ -99,38 +79,50 @@ services:
               device_ids: ['0']
               capabilities: [gpu]
 
-  llama-server:
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda
-    container_name: sarvam-30b-server
-    restart: unless-stopped
-    ports:
-      - "10802:8080"
-    volumes:
-      - ./models:/models
+  vllm-server:
+    image: vllm/vllm-openai:nightly
+    environment:
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    command: [
+      "--model", "Qwen/Qwen3.5-4B",
+      "--served-model-name", "gemma3",
+      "--host", "0.0.0.0",
+      "--port", "10802",
+      "--gpu-memory-utilization", "0.6",
+      "--tensor-parallel-size", "1",
+      "--max-model-len", "4096",
+      "--max-num-seqs", "16",
+      "--enable-chunked-prefill",
+      "--enable-prefix-caching",
+      "--max-num-batched-tokens", "1024",
+      "--enforce-eager",
+      "--chat-template-content-format", "openai",
+      "--language-model-only",
+      "--reasoning-parser", "qwen3",
+      "--default-chat-template-kwargs", "{\"enable_thinking\": false}",
+      "--enable-auto-tool-choice",
+      "--tool-call-parser", "qwen3_coder"
+    ]
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: all
+              count: 1
               capabilities: [gpu]
-    command: >
-      --model /models/sarvam-30b-Q4_K_M.gguf-00001-of-00006.gguf
-      --ctx-size 4096
-      --n-gpu-layers 99
-      --host 0.0.0.0
-      --port 8080
-      --jinja
-      --alias gemma3
+    restart: unless-stopped
+    ports:
+      - "10802:10802"
+
   agents:
     image: dwani/talk-agents:${DWANI_TALK_AGENTS_TAG:-latest}
     expose:
       - "8081"
     depends_on:
-      - llama-server
+      - vllm-server
     environment:
       LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-openai/gemma3}
-      LITELLM_API_BASE: http://llama-server:8080/v1
+      LITELLM_API_BASE: http://vllm-server:10802/v1
       LITELLM_API_KEY: ${LITELLM_API_KEY}
       AGENTS_API_KEY: ${AGENTS_API_KEY:-}
       AGENTS_ALLOWED_ORIGINS: ${AGENTS_ALLOWED_ORIGINS:-http://localhost}

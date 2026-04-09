@@ -7,22 +7,10 @@ import { useAudioRecorder } from './hooks/useAudioRecorder'
 import { useAuth } from './contexts/AuthContext'
 
 
-const LANGUAGES = [
-  { value: 'kannada', label: 'Kannada' },
-  { value: 'hindi', label: 'Hindi' },
-  { value: 'tamil', label: 'Tamil' },
-  { value: 'malayalam', label: 'Malayalam' },
-  { value: 'telugu', label: 'Telugu' },
-  { value: 'marathi', label: 'Marathi' },
-  { value: 'english', label: 'English' },
-  { value: 'german', label: 'German' },
-]
-
 const API_KEY = import.meta.env.VITE_API_KEY || ''
 
 export default function App() {
   const { currentUser, isAuthenticated, logout } = useAuth()
-  const [language, setLanguage] = useState('kannada')
   const [mode, setMode] = useState('agent') // 'llm' or 'agent'
   const [agentName, setAgentName] = useState('orchestrator')
   const [status, setStatus] = useState('idle')
@@ -78,7 +66,6 @@ export default function App() {
       try {
         const data = await sendSpeechRequest({
           blob,
-          language,
           mode: mode === 'agent' ? 'agent' : 'llm',
           agentName,
           sessionId,
@@ -122,7 +109,7 @@ export default function App() {
         setCanRetry(true)
       }
     },
-    [language, mode, agentName, sessionId]
+    [mode, agentName, sessionId]
   )
 
   const { startRecording, stopRecording } = useAudioRecorder(sendAndPlay)
@@ -510,20 +497,6 @@ export default function App() {
           <button className="btn-new-inline" onClick={startNewConversation}>
             New conversation
           </button>
-          <label className="footer-language">
-            Language
-            <select
-              value={language}
-              onChange={(e) => setLanguage(e.target.value)}
-              disabled={status !== 'idle'}
-            >
-              {LANGUAGES.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </label>
         </footer>
       </main>
     </div>

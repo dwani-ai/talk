@@ -73,7 +73,9 @@ async def validate_required_env() -> None:
     required = [
         "DWANI_API_BASE_URL_LLM",
         "DWANI_API_BASE_URL_TTS",
-        "DWANI_API_BASE_URL_ASR",
+        # Used by audio transcription via chat-completions (gemma4 multimodal).
+        # Defaults to http://localhost:8000/v1/chat/completions if not set.
+        # Keep optional to support local single-process setups.
     ]
     missing = [name for name in required if not os.getenv(name)]
     if missing:
@@ -192,8 +194,6 @@ if __name__ == "__main__":
         raise ValueError("Environment variable DWANI_API_BASE_URL_LLM must be set")
     if not os.getenv("DWANI_API_BASE_URL_TTS"):
         raise ValueError("Environment variable DWANI_API_BASE_URL_TTS must be set")
-    if not os.getenv("DWANI_API_BASE_URL_ASR"):
-        raise ValueError("Environment variable DWANI_API_BASE_URL_ASR must be set")
 
     parser = argparse.ArgumentParser(description="Run the FastAPI server.")
     parser.add_argument("--port", type=int, default=8000, help="Port to run the server on.")

@@ -15,11 +15,11 @@ async def health() -> Dict[str, str]:
 
 @router.get("/ready")
 async def ready() -> Dict[str, Any]:
-    """Readiness: dependencies (ASR, TTS, LLM) are reachable."""
+    """Readiness: dependencies (chat-completions, TTS, LLM) are reachable."""
     checks = {}
     async with httpx.AsyncClient(timeout=5.0) as client:
         for name, url in [
-            ("asr", os.getenv("DWANI_API_BASE_URL_ASR", "").rstrip("/") + "/" if os.getenv("DWANI_API_BASE_URL_ASR") else None),
+            ("chat_completions", os.getenv("DWANI_CHAT_COMPLETIONS_URL", "").strip() or None),
             ("tts", os.getenv("DWANI_API_BASE_URL_TTS", "").rstrip("/") + "/" if os.getenv("DWANI_API_BASE_URL_TTS") else None),
             ("llm", os.getenv("DWANI_API_BASE_URL_LLM", "").rstrip("/") + "/v1/models" if os.getenv("DWANI_API_BASE_URL_LLM") else None),
         ]:
@@ -28,7 +28,9 @@ async def ready() -> Dict[str, Any]:
                 continue
             try:
                 r = await client.get(url)
-                checks[name] = "ok" if r.status_code < 500 else f"error {r.status_code}"
+                # Some APIs may not allow GET on chat-completions endpoints (405).
+                ok = (r.status_code < 500) or (r.status_code in (401, 405))
+                checks[name] = "ok" if ok else f"error {r.status_code}"
             except Exception as e:
                 checks[name] = f"unreachable: {type(e).__name__}"
     return {"status": "ok" if all("ok" in str(v) or "skipped" in str(v) for v in checks.values()) else "degraded", "checks": checks}
