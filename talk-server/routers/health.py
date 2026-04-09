@@ -17,11 +17,13 @@ async def health() -> Dict[str, str]:
 async def ready() -> Dict[str, Any]:
     """Readiness: dependencies (chat-completions, TTS, LLM) are reachable."""
     checks = {}
+    llm_base = os.getenv("DWANI_API_BASE_URL_LLM", "").rstrip("/")
+    llm_v1 = llm_base if not llm_base else (llm_base if llm_base.endswith("/v1") else llm_base + "/v1")
     async with httpx.AsyncClient(timeout=5.0) as client:
         for name, url in [
-            ("chat_completions", os.getenv("DWANI_CHAT_COMPLETIONS_URL", "").strip() or None),
+            ("chat_completions", (llm_v1 + "/chat/completions") if llm_v1 else None),
             ("tts", os.getenv("DWANI_API_BASE_URL_TTS", "").rstrip("/") + "/" if os.getenv("DWANI_API_BASE_URL_TTS") else None),
-            ("llm", os.getenv("DWANI_API_BASE_URL_LLM", "").rstrip("/") + "/v1/models" if os.getenv("DWANI_API_BASE_URL_LLM") else None),
+            ("llm", (llm_v1 + "/models") if llm_v1 else None),
         ]:
             if not url:
                 checks[name] = "skipped (no url)"
