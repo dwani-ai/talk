@@ -85,3 +85,17 @@ curl -X POST 'http://localhost:8000/v1/speech_to_speech?language=kannada' \
 - [docs/runbook.md](docs/runbook.md) — Production runbook and incident handling.
 - [docs/RELEASE.md](docs/RELEASE.md) — Release/versioning workflow.
 - [.env.example](.env.example) — All optional env vars.
+
+
+<!-- 
+
+export LITELLM_MODEL_NAME="openai/gemma4"
+export LITELLM_API_BASE="https://gemma4-/v1"
+export LITELLM_API_KEY="some0ley"
+export DWANI_API_BASE_URL_LLM="https://gemma4-/v1"
+
+docker compose -f compose-dev.yml up -d
+
+
+
+-->
