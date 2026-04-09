@@ -24,11 +24,6 @@ describe('App', () => {
     expect(screen.getByText(/Hold to talk/i)).toBeInTheDocument()
   })
 
-  it('shows language selector', () => {
-    renderApp()
-    expect(screen.getByRole('combobox', { name: /language/i })).toBeInTheDocument()
-  })
-
   it('shows mode selector', () => {
     renderApp()
     const modeSelect = screen.getByRole('combobox', { name: /mode/i })

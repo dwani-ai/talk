@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse, Response
 
 from config import TTS_TIMEOUT, logger
 from deps import get_optional_user, limiter, require_api_key
-from models import ALLOWED_LANGUAGES, ALLOWED_AGENTS, ChatRequest, DEFAULT_AGENT_NAME
+from models import ALLOWED_AGENTS, ChatRequest, DEFAULT_AGENT_NAME
 from services import call_agent, call_llm, get_session_context, append_to_session, transcribe_audio
 
 router = APIRouter(prefix="/v1", tags=["Chat"])
@@ -74,12 +74,10 @@ async def speech_to_speech(
     _: None = Depends(require_api_key),
     __ = Depends(get_optional_user),
     file: UploadFile = File(..., description="Audio file to process"),
-    language: str = Query(..., description="Language of the audio (e.g. kannada, hindi, tamil, malayalam, telugu, marathi, english, german)"),
+    language: Optional[str] = Query(None, description="Legacy hint (optional); transcription is model-based"),
     mode: str = Query("llm", description="Processing mode: 'llm' or 'agent'"),
     agent_name: Optional[str] = Query(None, description="Agent name when mode='agent'"),
 ) -> Response:
-    if language not in ALLOWED_LANGUAGES:
-        raise HTTPException(status_code=400, detail=f"Language must be one of {ALLOWED_LANGUAGES}")
     if mode not in {"llm", "agent"}:
         raise HTTPException(status_code=400, detail="mode must be 'llm' or 'agent'")
 
@@ -97,7 +95,7 @@ async def speech_to_speech(
             raise HTTPException(status_code=400, detail=f"X-Session-ID must be <= {_MAX_SESSION_ID_LEN} characters")
         context = get_session_context(session_id) if session_id else []
 
-        asr_text = await transcribe_audio(file=file, language=language, request_id=request_id)
+        asr_text = await transcribe_audio(file=file, request_id=request_id)
         text = asr_text.text
         if not text or not text.strip():
             raise HTTPException(status_code=400, detail="No speech detected in the audio")
