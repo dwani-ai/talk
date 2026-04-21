@@ -27,8 +27,8 @@ In addition to local ADK usage, this folder also backs the **Talk agents HTTP se
 3. **Configure environment** — create a `.env` file in this directory (or in each agent subdirectory as needed) with your model settings:
 
    ```env
-   LITELLM_MODEL_NAME="openai/gemma3"
-   LITELLM_API_BASE="https://qwen-api"
+   LITELLM_MODEL_NAME="openai/gemma4"
+   LITELLM_API_BASE="https://your-openai-compatible-llm/v1"
    LITELLM_API_KEY="sk-dummy"
    ```
 
@@ -106,7 +106,7 @@ The service:
 - Uses LiteLlm (`google.adk.models.lite_llm.LiteLlm`) configured via environment:
 
   ```env
-  LITELLM_MODEL_NAME="openai/gemma3"
+  LITELLM_MODEL_NAME="openai/gemma4"
   LITELLM_API_BASE="http://vllm-server:10802/v1"  # in integrated stack
   LITELLM_API_KEY="sk-..."                        # or your real key
   ```

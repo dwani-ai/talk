@@ -25,7 +25,7 @@ fastuuid==0.14.0
 filelock==3.24.3
 frozenlist==1.8.0
 fsspec==2026.2.0
-google-adk==1.17.0
+google-adk==1.25.0
 google-api-core==2.30.0
 google-api-python-client==2.190.0
 google-auth==2.48.0

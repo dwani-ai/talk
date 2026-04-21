@@ -19,7 +19,7 @@ Try it: [talk.dwani.ai](https://talk.dwani.ai)
 |------|--------|
 | **Docker (host ASR/TTS/LLM)** | `cp .env.example .env` → `docker compose up -d` → http://localhost |
 | **Docker dev (build from source)** | `docker compose -f compose-dev.yml up -d --build` |
-| **Production (integrated TTS + LLM)** | `docker compose -f compose-integrated-qwen.yml up -d` |
+| **Production (integrated TTS + LLM)** | `docker compose -f compose-integrated-gemma4.yml up -d` |
 | **Local Python** | Set env URLs → `cd talk-server && pip install -r requirements.txt && python main.py` |
 
 ## Running
@@ -29,10 +29,10 @@ Copy `.env.example` to `.env`, set `DWANI_API_BASE_URL_*` if needed (defaults us
 
 **Integrated stack (TTS + LLM + ASR in compose; ASR):**  
 > 16 GB VRAM - GPU on server
-Run `docker compose -f compose-integrated-qwen.yml up -d`. Needs GPU. Open http://localhost.
+Run `docker compose -f compose-integrated-gemma4.yml up -d`. Needs GPU. Open http://localhost.
 
 > 6GB < 16 GB VRAM - GPU on laptop
-Run `docker compose -f compose-integrated-qwen-local.yml up -d`. Needs GPU. Open http://localhost.
+Run `docker compose -f compose-integrated-gemma4-local.yml up -d`. Needs GPU. Open http://localhost.
 
 
 **Local Python (no UI):**  
@@ -57,7 +57,7 @@ The UI can use the **LLM** or an **ADK agent** (travel planner, viva examiner, f
 | `DWANI_API_BASE_URL_ASR` | Yes | ASR URL |
 | `DWANI_API_BASE_URL_TTS` | Yes | TTS URL |
 | `DWANI_API_BASE_URL_LLM` | Yes | LLM URL (OpenAI-compatible) |
-| `DWANI_LLM_MODEL` | No | Model name (default: `gemma3`) |
+| `DWANI_LLM_MODEL` | No | Model name (default: `gemma4`) |
 | `DWANI_AGENT_BASE_URL` | No | Agents service URL in agent mode (e.g. `http://agents:8081`) |
 | `DWANI_API_KEY` | No | Optional API key required by talk-server when set |
 | `DWANI_REDIS_URL` | No | Redis URL for persistent chat sessions |

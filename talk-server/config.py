@@ -18,7 +18,7 @@ SESSION_CONTEXT_LIMIT = _env_int("DWANI_SESSION_CONTEXT_LIMIT", 10)
 SESSION_MAX_HISTORY = _env_int("DWANI_SESSION_MAX_HISTORY", 20)
 _MAX_SESSIONS = 5000
 
-LLM_MODEL = os.getenv("DWANI_LLM_MODEL", "gemma3")
+LLM_MODEL = os.getenv("DWANI_LLM_MODEL", "gemma4")
 AGENT_BASE_URL = os.getenv("DWANI_AGENT_BASE_URL", "").rstrip("/")
 LOG_FORMAT = os.getenv("DWANI_LOG_FORMAT", "json").strip().lower()
 

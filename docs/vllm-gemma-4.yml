@@ -5,7 +5,7 @@ services:
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
     command: [
       "--model", "google/gemma-4-E2B-it",
-      "--served-model-name", "gemma3",
+      "--served-model-name", "gemma4",
       "--host", "0.0.0.0",
       "--port", "10802",
       "--gpu-memory-utilization", "0.95",

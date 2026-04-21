@@ -5,10 +5,14 @@ from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 from google.adk import Agent
 from google.adk.models.lite_llm import LiteLlm
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import skill_toolset
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
+
+import pathlib
 
 from chess.state_store import get_state
 from chess.commands import execute_chess_command
@@ -22,6 +26,10 @@ MODEL = LiteLlm(
     api_key=os.getenv("LITELLM_API_KEY"),
 )
 
+_SKILLS_ROOT = pathlib.Path(__file__).resolve().parents[1] / "skills"
+_COMMON_SKILL = load_skill_from_dir(_SKILLS_ROOT / "common" / "tts-language")
+_CHESS_SKILL = load_skill_from_dir(_SKILLS_ROOT / "chess" / "chess-orchestration")
+_SKILL_TOOLSET = skill_toolset.SkillToolset(skills=[_COMMON_SKILL, _CHESS_SKILL])
 APP_NAME = os.getenv("AGENTS_APP_NAME", "talk_chess")
 _ai_session_service = InMemorySessionService()
 _known_ai_sessions: set[str] = set()
@@ -309,33 +317,15 @@ def run_chess_command(tool_context: ToolContext, message: str) -> Dict[str, Any]
         return {"success": False, "error": err, "verified_fact": f"Command failed: {err}"}
 
 
-CHESS_ORCHESTRATOR_INSTRUCTION = """
-You are the chess orchestrator for Talk Chess.
-You must always call exactly one tool before replying.
-
-Use run_chess_command for user command execution:
-- new game / reset / mode change
-- move commands like "e2 to e4" or "e2e4"
-- ai move
-- board/state requests
-
-Use get_chess_state when user asks to inspect board details without changing anything.
-Use call_chess_ai only when the user explicitly asks for a move suggestion and not execution.
-
-Validation rule (no hallucination):
-- Reply only from tool output.
-- If success=true, reply with verified_fact only.
-- If success=false, reply with the returned error/verified_fact only.
-Do not invent moves, captures, or board positions.
-"""
-
-
 root_chess_orchestrator_agent = Agent(
     name="chess_orchestrator",
     model=MODEL,
     description="Agent-driven chess gameplay with deterministic move execution.",
-    instruction=CHESS_ORCHESTRATOR_INSTRUCTION,
-    tools=[run_chess_command, get_chess_state, call_chess_ai],
+    instruction=(
+        "You are the chess orchestrator. Use your skills to load the detailed "
+        "tool-usage and no-hallucination policy, then follow it strictly."
+    ),
+    tools=[_SKILL_TOOLSET, run_chess_command, get_chess_state, call_chess_ai],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.15,
     ),
