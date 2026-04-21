@@ -5,11 +5,15 @@ from typing import Any, Dict
 from dotenv import load_dotenv
 from google.adk import Agent
 from google.adk.models.lite_llm import LiteLlm
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import skill_toolset
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
 from chess.state_store import get_state
 from chess.commands import list_legal_moves_for_side
+
+import pathlib
 
 load_dotenv()
 
@@ -19,6 +23,10 @@ MODEL = LiteLlm(
     api_key=os.getenv("LITELLM_API_KEY"),
 )
 
+_SKILLS_ROOT = pathlib.Path(__file__).resolve().parents[1] / "skills"
+_COMMON_SKILL = load_skill_from_dir(_SKILLS_ROOT / "common" / "tts-language")
+_AI_SKILL = load_skill_from_dir(_SKILLS_ROOT / "chess" / "chess-ai-planner")
+_SKILL_TOOLSET = skill_toolset.SkillToolset(skills=[_COMMON_SKILL, _AI_SKILL])
 
 def choose_ai_move(side: str = "black") -> Dict[str, Any]:
     state = get_state()
@@ -44,19 +52,12 @@ def get_ai_move(tool_context: ToolContext, side: str = "black") -> Dict[str, Any
     return choose_ai_move(side=side)
 
 
-CHESS_AI_INSTRUCTION = """
-You are a chess move planner.
-Always call get_ai_move exactly once.
-Respond only with the returned verified_fact and do not invent any move.
-"""
-
-
 root_chess_ai_agent = Agent(
     name="chess_ai_agent",
     model=MODEL,
     description="Returns one legal chess move for a side.",
-    instruction=CHESS_AI_INSTRUCTION,
-    tools=[get_ai_move],
+    instruction="You are a chess move planner. Use your skills and follow them strictly.",
+    tools=[_SKILL_TOOLSET, get_ai_move],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.1,
     ),

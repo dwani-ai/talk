@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 venv_new/
+models/
 NeMo/
 asr_venv
 *.nemo

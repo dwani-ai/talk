@@ -6,6 +6,8 @@ sys.path.append("..")
 from dotenv import load_dotenv
 
 from google.adk import Agent
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import skill_toolset
 from google.genai import types
 from typing import Optional, List, Dict
 
@@ -15,6 +17,8 @@ from google.adk.tools.tool_context import ToolContext
 from google import genai
 
 load_dotenv()
+
+import pathlib
 
 
 import os
@@ -27,6 +31,10 @@ MODEL = LiteLlm(
     api_key=os.getenv("LITELLM_API_KEY"),
 )
 
+_SKILLS_ROOT = pathlib.Path(__file__).resolve().parents[1] / "skills"
+_COMMON_SKILL = load_skill_from_dir(_SKILLS_ROOT / "common" / "tts-language")
+_TRAVEL_STEERING_SKILL = load_skill_from_dir(_SKILLS_ROOT / "travel-planner" / "travel-steering")
+_SKILL_TOOLSET = skill_toolset.SkillToolset(skills=[_COMMON_SKILL, _TRAVEL_STEERING_SKILL])
 
 # Tools (add the tool here when instructed)
 def save_attractions_to_state(
@@ -96,29 +104,13 @@ root_agent = Agent(
     name="steering",
     model=MODEL,
     description="Start a user on a travel adventure.",
-    instruction="""
-        You are steering a travel-planning conversation.
-        Users may speak Kannada, Hindi, Tamil, or English.
-        Detect the language from their message and always respond in that same language.
-        Keep each reply to at most 2 lines.
-
-        Ask the user if they know where they'd like to travel
-        or if they need some help deciding.
-
-        - If the user does NOT know where to go and wants ideas,
-          delegate to the `travel_brainstormer` sub-agent.
-
-        - If the user ALREADY has a country in mind,
-          delegate to the `attractions_planner` sub-agent
-          to list attractions in that country.
-
-        - If they need help deciding, send them to 'travel_brainstormer'.
-        
-        - If they know what country they'd like to visit, send them to the 'attractions_planner'.
-
-        """,
+    instruction=(
+        "You are a travel-planning conversation steerer. Use your skills to load the "
+        "detailed steering policy (language mirroring, brevity, and delegation rules)."
+    ),
     generate_content_config=types.GenerateContentConfig(
         temperature=0,
     ),
+    tools=[_SKILL_TOOLSET],
     sub_agents=[travel_brainstormer, attractions_planner],
 )

@@ -50,7 +50,13 @@ async def transcribe_audio(file: UploadFile, request_id: Optional[str] = None) -
     b64 = base64.standard_b64encode(file_content).decode("ascii")
     audio_data_url = f"data:{mime};base64,{b64}"
 
-    chat_url = os.getenv("DWANI_CHAT_COMPLETIONS_URL", "http://localhost:8000/v1/chat/completions")
+    llm_base = (os.getenv("DWANI_API_BASE_URL_LLM", "") or "").rstrip("/")
+    if not llm_base:
+        chat_url = "http://localhost:8000/v1/chat/completions"
+    elif llm_base.endswith("/v1"):
+        chat_url = f"{llm_base}/chat/completions"
+    else:
+        chat_url = f"{llm_base}/v1/chat/completions"
     payload = {
         "model": "gemma4",
         "messages": [

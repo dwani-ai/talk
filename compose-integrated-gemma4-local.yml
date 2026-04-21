@@ -25,7 +25,7 @@ services:
     environment:
       DWANI_API_BASE_URL_TTS: http://tts-indic-server:10804
       DWANI_API_BASE_URL_LLM: http://vllm-server:10802
-      DWANI_LLM_MODEL: ${DWANI_LLM_MODEL:-gemma3}
+      DWANI_LLM_MODEL: ${DWANI_LLM_MODEL:-gemma4}
       DWANI_AGENT_BASE_URL: http://agents:8081
       DWANI_REDIS_URL: ${DWANI_REDIS_URL:-redis://redis:6379/0}
       DWANI_DATABASE_URL: ${DWANI_DATABASE_URL:-postgresql+psycopg://talk:talk@postgres:5432/talk}
@@ -78,29 +78,28 @@ services:
               device_ids: ['0']
               capabilities: [gpu]
   vllm-server:
-    image: vllm/vllm-openai:nightly
+    image: dwani/vllm-gemma4-audio
     environment:
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-    command: [
-      "--model", "Qwen/Qwen3.5-0.8B",
-      "--served-model-name", "gemma3",
-      "--host", "0.0.0.0",
-      "--port", "10802",
-      "--gpu-memory-utilization", "0.6",
-      "--tensor-parallel-size", "1",
-      "--max-model-len", "4096",
-      "--max-num-seqs", "16",
-      "--enable-chunked-prefill",
-      "--enable-prefix-caching",
-      "--max-num-batched-tokens", "1024",
-      "--enforce-eager",
-      "--chat-template-content-format", "openai",
-      "--language-model-only",
-      "--reasoning-parser", "qwen3",
-      "--default-chat-template-kwargs", "{\"enable_thinking\": false}",
-      "--enable-auto-tool-choice",
-      "--tool-call-parser", "qwen3_coder"
-    ]
+    shm_size: '4gb'
+    command: >
+      --model google/gemma-4-E2B-it
+      --served-model-name gemma4
+      --host 0.0.0.0
+      --port 10802
+      --trust-remote-code
+      --enforce-eager
+      --gpu-memory-utilization 0.85
+      --max-model-len 8192
+      --max-num-seqs 16
+      --enable-chunked-prefill
+      --enable-prefix-caching
+      --chat-template-content-format openai
+      --tool-call-parser gemma4
+      --reasoning-parser gemma4
+      --enable-auto-tool-choice
+      --limit-mm-per-prompt '{"image":2,"video":1,"audio":1}'
+      --default-chat-template-kwargs '{"enable_thinking": false}'
     deploy:
       resources:
         reservations:
@@ -119,7 +118,7 @@ services:
     depends_on:
       - vllm-server
     environment:
-      LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-openai/gemma3}
+      LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-openai/gemma4}
       LITELLM_API_BASE: http://vllm-server:10802/v1
       LITELLM_API_KEY: ${LITELLM_API_KEY}
       AGENTS_API_KEY: ${AGENTS_API_KEY:-}

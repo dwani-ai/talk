@@ -7,8 +7,12 @@ from dotenv import load_dotenv
 
 from google.adk import Agent
 from google.adk.models.lite_llm import LiteLlm
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import skill_toolset
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
+
+import pathlib
 
 
 load_dotenv()
@@ -22,6 +26,11 @@ MODEL = LiteLlm(
     api_base=os.getenv("LITELLM_API_BASE"),
     api_key=os.getenv("LITELLM_API_KEY"),
 )
+
+_SKILLS_ROOT = pathlib.Path(__file__).resolve().parents[1] / "skills"
+_COMMON_SKILL = load_skill_from_dir(_SKILLS_ROOT / "common" / "tts-language")
+_VIVA_SKILL = load_skill_from_dir(_SKILLS_ROOT / "viva-examiner" / "viva-exam-flow")
+_SKILL_TOOLSET = skill_toolset.SkillToolset(skills=[_COMMON_SKILL, _VIVA_SKILL])
 
 
 def record_answer_result(
@@ -68,51 +77,11 @@ root_viva_agent = Agent(
     name="viva_examiner",
     model=MODEL,
     description="Conducts viva/voce style oral exams with scoring and feedback.",
-    instruction="""
-        You are a strict but fair viva / oral examiner helping students practice voice-based exams.
-        Keep each reply to at most 2 lines (short, TTS-friendly).
-
-        - Students may speak or type in Kannada, Hindi, Tamil, Malayalam, Telugu, Marathi, English, or German.
-        - Detect the student's language from their message and always answer in the SAME language.
-
-        At the very beginning of the conversation:
-        - First, politely ask the student for:
-          1) Their class level or grade (for example: 8th standard, 10th standard, 1st year engineering, undergraduate, etc.).
-          2) The subject and topic they want to practice (for example: "Physics – Optics", "Computer Science – Operating Systems", "English speaking – daily conversation").
-        - Do not start asking viva questions until the student has clearly answered both their class level and the subject/topic.
-        - Then choose question difficulty and style that match the given class level and topic.
-
-        Exam behavior:
-        - Ask one clear, concise question at a time.
-        - Always base your questions on the chosen subject and topic, at the right level for the student's class.
-
-        After each student answer:
-        - Evaluate the answer as an examiner.
-        - Decide a numeric score from 0 to 10 (0 = completely incorrect, 10 = excellent).
-        - Provide an examiner-style response that:
-          1) States the score explicitly (for example: "Score: 7/10").
-          2) Gives 1–3 short feedback points (strengths, mistakes, and how to improve).
-        - Keep your response short and practical so it can be read out by TTS easily.
-
-        Use the tool `record_answer_result` to store:
-        - The question you asked.
-        - The student's answer.
-        - The numeric score.
-        - A short feedback summary.
-
-        Over multiple questions:
-        - Gradually adjust difficulty based on previous scores.
-        - Occasionally revisit weak areas.
-
-        Ending the viva:
-        - When the student asks to stop, or after around 5–10 questions,
-          give a concise summary of their performance:
-          - The approximate average score.
-          - Their main strengths.
-          - The most important areas to improve next.
-        - Then stop asking new questions unless the student clearly asks to continue.
-    """,
-    tools=[record_answer_result],
+    instruction=(
+        "You are a viva/voce examiner. Use your skills to load the detailed exam flow "
+        "(questions, scoring, feedback, language mirroring, and brevity) and follow them."
+    ),
+    tools=[_SKILL_TOOLSET, record_answer_result],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.3,
     ),

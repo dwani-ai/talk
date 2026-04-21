@@ -9,10 +9,14 @@ from dotenv import load_dotenv
 
 from google.adk import Agent
 from google.adk.models.lite_llm import LiteLlm
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import skill_toolset
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
+
+import pathlib
 
 _WAREHOUSE_DIR = os.path.dirname(os.path.abspath(__file__))
 if _WAREHOUSE_DIR not in sys.path:
@@ -34,6 +38,10 @@ MODEL = LiteLlm(
     api_key=os.getenv("LITELLM_API_KEY"),
 )
 
+_SKILLS_ROOT = pathlib.Path(__file__).resolve().parents[1] / "skills"
+_COMMON_SKILL = load_skill_from_dir(_SKILLS_ROOT / "common" / "tts-language")
+_WAREHOUSE_SKILL = load_skill_from_dir(_SKILLS_ROOT / "warehouse" / "warehouse-orchestration")
+_SKILL_TOOLSET = skill_toolset.SkillToolset(skills=[_COMMON_SKILL, _WAREHOUSE_SKILL])
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -256,41 +264,23 @@ def get_warehouse_state(tool_context: ToolContext) -> Dict[str, Any]:
     }
 
 
-WAREHOUSE_ORCHESTRATOR_INSTRUCTION = """
-You are a warehouse robotics orchestrator. You manage three specialist robots: UAV (mapping), UGV (ground pick/drop/move), Arm (stacks).
-
-ALWAYS use run_warehouse_command for these — the 3D view updates only when you use this tool (never use call_uav/call_ugv/call_arm for them):
-- Any "move <robot> <direction>" or "<robot> move <direction>": e.g. "move ugv north", "move uav south", "ugv move east", "uav south", "move arm west" → run_warehouse_command(robot=ugv or uav or arm, action="move", direction=north or south or east or west). Extract robot and direction from the user message.
-- "ugv pick item-1", "pick item-2" (UGV) → run_warehouse_command(robot="ugv", action="pick", item_id="item-1")
-- "ugv drop item-1 at 10 5" → run_warehouse_command(robot="ugv", action="drop", item_id="item-1", x=10, z=5)
-- "arm pick from stack stack-1" → run_warehouse_command(robot="arm", action="pick_from_stack", stack_id="stack-1")
-- "arm place item-1 on stack stack-1" → run_warehouse_command(robot="arm", action="place_on_stack", stack_id="stack-1", item_id="item-1")
-
-Use call_ugv / call_uav / call_arm ONLY for:
-- "move ugv towards arm", "move towards arm" (not a cardinal direction) → call_ugv
-- "scan the area", "find items", "map the warehouse" → call_uav
-- Vague or multi-step requests → call the appropriate sub-agent
-
-State and queries:
-- get_robots_state: "what are robots doing?", "robot status", "where are the robots?"
-- get_warehouse_state: "where are the items?", "inventory", "what items exist?"
-
-You MUST call exactly one tool per user request; never answer from memory.
-
-VALIDATION — no hallucination: Your reply MUST be based ONLY on the tool output.
-- If the tool returned success=True and verified_fact: your reply MUST be that verified_fact (or a brief paraphrase in the user's language). Do not add positions, outcomes, or any fact not in verified_fact.
-- If the tool returned success=False or an error: your reply MUST state that the command failed and include the error message. Do not claim success or invent an outcome.
-- For get_robots_state / get_warehouse_state: report only what is in the returned data; do not invent any robot, item, or position.
-Detect the user's language and respond in the SAME language. Keep replies concise and TTS-friendly.
-"""
-
-
 root_warehouse_orchestrator_agent = Agent(
     name="warehouse_orchestrator",
     model=MODEL,
     description="Routes warehouse tasks to UAV, UGV, or arm robot agents and can report robot/item state.",
-    instruction=WAREHOUSE_ORCHESTRATOR_INSTRUCTION,
-    tools=[run_warehouse_command, call_uav, call_ugv, call_arm, get_robots_state, get_warehouse_state],
+    instruction=(
+        "You are a warehouse robotics orchestrator. Use your skills to load the detailed "
+        "tool-usage and no-hallucination policy, then follow it strictly."
+    ),
+    tools=[
+        _SKILL_TOOLSET,
+        run_warehouse_command,
+        call_uav,
+        call_ugv,
+        call_arm,
+        get_robots_state,
+        get_warehouse_state,
+    ],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.25,
     ),

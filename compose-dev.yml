@@ -23,7 +23,7 @@ services:
     environment:
       DWANI_API_BASE_URL_TTS: ${DWANI_API_BASE_URL_TTS:-http://host.docker.internal:10804}
       DWANI_API_BASE_URL_LLM: ${DWANI_API_BASE_URL_LLM:-http://host.docker.internal:10802}
-      DWANI_LLM_MODEL: ${DWANI_LLM_MODEL:-gemma3}
+      DWANI_LLM_MODEL: ${DWANI_LLM_MODEL:-gemma4}
       DWANI_AGENT_BASE_URL: ${DWANI_AGENT_BASE_URL:-http://agents:8081}
       DWANI_REDIS_URL: ${DWANI_REDIS_URL:-redis://redis:6379/0}
       DWANI_DATABASE_URL: ${DWANI_DATABASE_URL:-postgresql+psycopg://talk:talk@postgres:5432/talk}
@@ -70,7 +70,7 @@ services:
       retries: 3
       start_period: 5s
     environment:
-      LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-openai/gemma3}
+      LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-openai/gemma4}
       LITELLM_API_BASE: ${LITELLM_API_BASE:-https://qwen/v1}
       LITELLM_API_KEY: ${LITELLM_API_KEY}
       AGENTS_API_KEY: ${AGENTS_API_KEY:-}
